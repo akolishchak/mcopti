@@ -32,16 +32,16 @@ pub struct OptionContract {
     pub mark: f64,
     #[serde(deserialize_with = "de_f64")]
     pub bid: f64,
-    // #[serde(default, deserialize_with = "de_f64")]
-    // pub bid_size: f64,
+    #[serde(default, deserialize_with = "de_f64")]
+    pub bid_size: f64,
     #[serde(default, deserialize_with = "de_f64")]
     pub ask: f64,
-    // #[serde(default, deserialize_with = "de_f64")]
-    // pub ask_size: f64,
-    // #[serde(default, deserialize_with = "de_f64")]
-    // pub volume: f64,
-    // #[serde(default, deserialize_with = "de_f64")]
-    // pub open_interest: f64,
+    #[serde(default, deserialize_with = "de_f64")]
+    pub ask_size: f64,
+    #[serde(default, deserialize_with = "de_f64")]
+    pub volume: f64,
+    #[serde(default, deserialize_with = "de_f64")]
+    pub open_interest: f64,
     pub date: NaiveDate,
     #[serde(deserialize_with = "de_f64")]
     pub implied_volatility: f64,

@@ -1,11 +1,11 @@
 
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, borrow::Cow};
 
 /// Piecewise Cubic Hermite Interpolating Polynomial preserving monotonicity.
 #[derive(Clone, Debug)]
-pub struct Pchip {
-    x: Vec<f64>,
-    y: Vec<f64>,
+pub struct Pchip<'a> {
+    x: Cow<'a, [f64]>,
+    y: Cow<'a, [f64]>,
     d: Vec<f64>, // slopes at nodes
 }
 
@@ -28,9 +28,15 @@ impl fmt::Display for PchipError {
 
 impl Error for PchipError {}
 
-impl Pchip {
+impl<'a> Pchip<'a> {
     /// Build a monotone shape-preserving cubic interpolant.
-    pub fn new(x: Vec<f64>, y: Vec<f64>) -> Result<Self, PchipError> {
+    pub fn new<T>(x: T, y: T) -> Result<Self, PchipError> 
+    where
+        T: Into<Cow<'a, [f64]>>,
+    {
+        let x = x.into();
+        let y = y.into();
+
         let n = x.len();
         if n < 2 || y.len() != n {
             return Err(PchipError::LengthMismatch);

@@ -12,6 +12,8 @@ const TAU_MONO_MODE: TauMonoMode = TauMonoMode::Taper;
 const TAU_NODE_ATOL: f64 = 1e-10;
 const TAU_TAPER_WINDOW: f64 = 24.0 / (24.0 * 365.0);  // ~24 hours in year fraction
 
+const K_GRID: [f64; K_N] = linspace_array::<K_N>(K_MIN, K_MAX);
+
 enum TauMonoMode {
     None,
     Taper,
@@ -54,7 +56,7 @@ impl VolSurface {
         }
     }
 
-    fn row_fast<'a>(&'a self, side: OptionType, t: f64) -> Cow<'a, [f64]> {
+    fn row_fast<'a>(&'a self, side: OptionType, tau: f64) -> Cow<'a, [f64]> {
         let lut = match side {
             OptionType::Call => &self.calls,
             OptionType::Put => &self.puts,
@@ -63,14 +65,14 @@ impl VolSurface {
         //
         // exact match => return row directly
         //
-        let closest_idx = match lut.tau.binary_search_by(|x| x.total_cmp(&t)) {
+        let closest_idx = match lut.tau.binary_search_by(|x| x.total_cmp(&tau)) {
             Ok(idx) => idx,
             Err(0) => 0,
             Err(idx) if idx >= lut.tau.len() => lut.tau.len() - 1,
             Err(idx) => {
                 let left = lut.tau[idx - 1];
                 let right = lut.tau[idx];
-                if (t - left).abs() <= (right - t).abs() {
+                if (tau - left).abs() <= (right - tau).abs() {
                     idx - 1
                 } else {
                     idx
@@ -78,7 +80,7 @@ impl VolSurface {
             }
         };
 
-        let closest_dist = (lut.tau[closest_idx] - t).abs();
+        let closest_dist = (lut.tau[closest_idx] - tau).abs();
         if matches!(TAU_MONO_MODE, TauMonoMode::None) || closest_dist < TAU_NODE_ATOL {
             return (&lut.w_raw[closest_idx * K_N..(closest_idx + 1) * K_N]).into();
         }
@@ -86,17 +88,17 @@ impl VolSurface {
         //
         // Extrapolation
         //
-        if t < lut.tmin {
+        if tau < lut.tmin {
             return (&lut.w_raw[0..K_N]).into();
         }
-        if t > lut.tmax {
+        if tau > lut.tmax {
             return (&lut.w_raw[(lut.tau.len() - 1) * K_N..lut.tau.len() * K_N]).into();
         }
 
         //
         // Within range: linear interp on LUT between nearest grid points
         //
-        let tau_grid_pos = (t - lut.tmin) * (TAU_LUT_SIZE as f64 - 1.0) / (lut.tmax - lut.tmin).max(EPSILON);
+        let tau_grid_pos = (tau - lut.tmin) * (TAU_LUT_SIZE as f64 - 1.0) / (lut.tmax - lut.tmin).max(EPSILON);
         // position in tau LUT grid
         let i0 = tau_grid_pos.floor() as usize;
         let i1 = (i0 + 1).min(TAU_LUT_SIZE - 1);
@@ -136,6 +138,23 @@ impl VolSurface {
         w_tapered.into()
     }
 
+    fn iv(&self, side: OptionType, tau: f64, strike: f64) -> f64 {
+        let k = (strike / self.spot).ln();
+        let w_row = self.row_fast(side, tau);
+
+        let w = interp_linear(k, &K_GRID, &w_row);
+        w.sqrt().max(EPSILON)
+    }
+
+    /// Compute risk-neutral forward F(T), discount factor D(T) ≈ exp(-rT),
+    /// short rate r, and GBM drift mu = ln(F/S0)/T from the option chain at this tau.
+    ///
+    /// Returns: (F, D, r, mu). On failure returns (nan, nan, nan, nan).
+    fn implied_forward_and_mu(&self, tau: f64) {
+
+
+    }
+
 
 }
 
@@ -150,7 +169,6 @@ struct TauLut {
     tau_range: Vec<(usize, usize)>,
     k: Vec<f64>,
     iv: Vec<f64>,
-    k_grid: Vec<f64>,
     index: usize,
     last_tau: Option<f64>,
 }
@@ -168,7 +186,6 @@ impl TauLut {
             tmax: 0.0,
             k: Vec::with_capacity(capacity),
             iv: Vec::with_capacity(capacity),
-            k_grid: linspace(K_MIN, K_MAX, K_N),
             index: 0,
             last_tau: None,
         }
@@ -191,7 +208,7 @@ impl TauLut {
 
     fn build(&mut self) {
         let n_tau = self.tau.len();
-        let k_n = self.k_grid.len();
+        let k_n = K_GRID.len();
 
         self.w_raw.clear();
         // [n_tau * K_N]
@@ -206,7 +223,7 @@ impl TauLut {
             let pchip = Pchip::new(k, w.as_slice())
                 .expect("Failed to create PCHIP interpolant");
 
-            self.w_raw.extend(self.k_grid.iter().map(|&k| pchip.eval(k).max(EPSILON)));
+            self.w_raw.extend(K_GRID.iter().map(|&k| pchip.eval(k).max(EPSILON)));
         }
 
         // Turn W_raw into column-major (transpose) for per-strike monotonic enforcement.
@@ -231,7 +248,7 @@ impl TauLut {
 
         self.tmin = self.tau.first().map_or(0.0, |&t| t);
         self.tmax = self.tau.last().map_or(0.0, |&t| t);
-        let tau_grid = linspace(self.tmin, self.tmax, TAU_LUT_SIZE);
+        let tau_grid = linspace_vec(self.tmin, self.tmax, TAU_LUT_SIZE);
 
         // [TAU_LUT_SIZE * K_N] row-major for fast row access
         self.w_raw_lut = self.to_lut(&w_raw_t, (k_n, n_tau), tau_grid.as_slice());
@@ -263,13 +280,51 @@ impl TauLut {
     }
 }
 
-fn linspace(start: f64, end: f64, n: usize) -> Vec<f64> {
-    match n {
-        0 => Vec::new(),
-        1 => vec![start],
-        len => {
-            let step = (end - start) / (len - 1) as f64;
-            (0..len).map(|i| start + step * i as f64).collect()
-        }
+fn interp_linear(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
+    let n = xp.len();
+    assert!(n >= 2, "xp must have at least two points");
+    
+    let high = match xp.binary_search_by(|v| v.total_cmp(&x)) {
+        Ok(i) => i,
+        Err(i) => i.min(n - 1),
+    };
+
+    let low = high.saturating_sub(1);
+    if low == high {
+        return fp[low];
     }
+    let t = (x - xp[low]) / (xp[high] - xp[low]).max(EPSILON);
+    fp[low] + t * (fp[high] - fp[low])
+}
+
+const fn fill_linspace(out: &mut [f64], start: f64, end: f64) {
+    let n = out.len();
+    if n == 0 {
+        return;
+    }
+    if n == 1 {
+        out[0] = start;
+        return;
+    }
+
+    let step = (end - start) / ((n - 1) as f64);
+    let mut i = 0;
+    while i < n {
+        out[i] = start + step * (i as f64);
+        i += 1;
+    }
+}
+
+// Array version (compile-time size)
+pub const fn linspace_array<const N: usize>(start: f64, end: f64) -> [f64; N] {
+    let mut out = [0.0; N];
+    fill_linspace(&mut out, start, end);
+    out
+}
+
+// Vec version (runtime size)
+pub fn linspace_vec(start: f64, end: f64, n: usize) -> Vec<f64> {
+    let mut out = vec![0.0; n];
+    fill_linspace(&mut out, start, end);
+    out
 }

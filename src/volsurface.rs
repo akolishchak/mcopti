@@ -60,7 +60,7 @@ impl VolSurface {
         }
     }
 
-    fn row<'a>(&'a self, side: OptionType, tau: f64) -> Cow<'a, [f64]> {
+    pub fn row<'a>(&'a self, side: OptionType, tau: f64) -> Cow<'a, [f64]> {
         let lut = match side {
             OptionType::Call => &self.calls,
             OptionType::Put => &self.puts,
@@ -142,7 +142,7 @@ impl VolSurface {
         w_tapered.into()
     }
 
-    fn iv(&self, side: OptionType, tau: f64, strike: f64) -> f64 {
+    pub fn iv(&self, side: OptionType, tau: f64, strike: f64) -> f64 {
         let k = (strike / self.spot).ln();
         let w_row = self.row(side, tau);
 

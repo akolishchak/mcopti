@@ -49,6 +49,10 @@ impl VolSurface {
             }
         }
 
+        // Precompute LUTs so the surface is ready for queries.
+        calls.build();
+        puts.build();
+
         Self {
             spot,
             calls,
@@ -56,7 +60,7 @@ impl VolSurface {
         }
     }
 
-    fn row_fast<'a>(&'a self, side: OptionType, tau: f64) -> Cow<'a, [f64]> {
+    fn row<'a>(&'a self, side: OptionType, tau: f64) -> Cow<'a, [f64]> {
         let lut = match side {
             OptionType::Call => &self.calls,
             OptionType::Put => &self.puts,
@@ -140,21 +144,11 @@ impl VolSurface {
 
     fn iv(&self, side: OptionType, tau: f64, strike: f64) -> f64 {
         let k = (strike / self.spot).ln();
-        let w_row = self.row_fast(side, tau);
+        let w_row = self.row(side, tau);
 
         let w = interp_linear(k, &K_GRID, &w_row);
-        w.sqrt().max(EPSILON)
+        (w / tau.max(EPSILON)).sqrt().max(EPSILON)
     }
-
-    /// Compute risk-neutral forward F(T), discount factor D(T) ≈ exp(-rT),
-    /// short rate r, and GBM drift mu = ln(F/S0)/T from the option chain at this tau.
-    ///
-    /// Returns: (F, D, r, mu). On failure returns (nan, nan, nan, nan).
-    fn implied_forward_and_mu(&self, tau: f64) {
-
-
-    }
-
 
 }
 
@@ -327,4 +321,108 @@ pub fn linspace_vec(start: f64, end: f64, n: usize) -> Vec<f64> {
     let mut out = vec![0.0; n];
     fill_linspace(&mut out, start, end);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::option_chain::parse_option_chain_file;
+    use chrono::NaiveDate;
+    use std::path::PathBuf;
+
+    const ARM_CHAIN_PATH: &str = "tests/fixtures/ARM_option_chain_20250908_160038.json";
+
+    fn load_arm_chain() -> OptionChain {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(ARM_CHAIN_PATH);
+        parse_option_chain_file(path).expect("failed to load ARM chain fixture")
+    }
+
+    fn build_surface(chain: &OptionChain) -> VolSurface {
+        let mut surface = VolSurface::new(chain);
+        surface.calls.build();
+        surface.puts.build();
+        surface
+    }
+
+    fn tau_from(chain: &OptionChain, year: i32, month: u32, day: u32) -> f64 {
+        let exp = NaiveDate::from_ymd_opt(year, month, day).expect("valid expiry date");
+        (exp - chain.date).num_days() as f64 / 365.0
+    }
+
+    #[test]
+    fn iv_matches_values() {
+        let chain = load_arm_chain();
+        let surface = build_surface(&chain);
+
+        let cases = [
+            (OptionType::Call, 140.0, tau_from(&chain, 2025, 10, 17), 0.439_831_972_631_664_07_f64),
+            (OptionType::Put, 120.0, tau_from(&chain, 2025, 11, 21), 0.519_075_134_542_538_2_f64),
+            (OptionType::Call, 150.0, 0.25_f64, 0.478_973_206_992_695_74_f64),
+        ];
+
+        let mut failures = Vec::new();
+        for (side, strike, tau, expected) in cases {
+            let iv = surface.iv(side, tau, strike);
+            let diff = (iv - expected).abs();
+            if diff >= 1e-9 {
+                failures.push(format!(
+                    "side {side:?} strike {strike} tau {tau} expected {expected} got {iv} (diff {diff})"
+                ));
+            }
+        }
+
+        if !failures.is_empty() {
+            panic!("IV mismatches:\\n{}", failures.join("\\n"));
+        }
+    }
+
+    #[test]
+    fn call_row_matches_slice() {
+        let chain = load_arm_chain();
+        let surface = build_surface(&chain);
+        let tau = tau_from(&chain, 2026, 4, 17);
+
+        let row = surface.row(OptionType::Call, tau);
+
+        let samples = [
+            (40_usize, -0.5_f64, 0.197_407_263_743_690_89_f64),
+            (50, 0.0, 0.135_655_794_423_802_82_f64),
+            (60, 0.5, 0.081_273_305_997_084_83_f64),
+            (70, 1.0, 1e-12_f64),
+        ];
+
+        for (idx, k, expected) in samples {
+            let got = row[idx];
+            let diff = (got - expected).abs();
+            assert!(
+                diff < 1e-12,
+                "k_grid[{idx}] (k={k}) expected {expected} got {got} diff {diff}"
+            );
+        }
+
+        let expected_slice = [
+            0.142_937_574_337_924_09_f64,
+            0.148_229_911_352_458_75_f64,
+            0.142_002_465_679_673_9_f64,
+            0.137_476_747_958_100_5_f64,
+            0.142_719_370_225_230_98_f64,
+            0.135_655_794_423_802_82_f64,
+            0.139_390_358_882_453_46_f64,
+            0.137_884_516_362_119_12_f64,
+            0.130_129_085_272_258_92_f64,
+            0.129_156_548_286_169_8_f64,
+            0.128_218_596_802_933_46_f64,
+        ];
+
+        let start = 45;
+        for (offset, expected) in expected_slice.iter().enumerate() {
+            let idx = start + offset;
+            let got = row[idx];
+            let diff = (got - expected).abs();
+            assert!(
+                diff < 1e-8,
+                "row[{idx}] expected {expected} got {got} diff {diff}"
+            );
+        }
+    }
 }

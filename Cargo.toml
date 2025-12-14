@@ -4,8 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# date handling
 chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
 chrono-tz = "0.10.4"
+# market data storage
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+# json parsing
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

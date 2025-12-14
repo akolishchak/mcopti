@@ -66,6 +66,7 @@ pub enum DbMode {
 pub struct MarketData {
     connection: Connection,
     columns: Option<String>,
+    period_step: i64,
 }
 
 impl MarketData {
@@ -103,9 +104,12 @@ impl MarketData {
             }
         };
 
+        let period_step = Self::resolution_steps(resolution);
+
         Ok(Self {
             connection,
             columns: None,
+            period_step,
         })
     }
 
@@ -137,8 +141,16 @@ impl MarketData {
             ORDER BY timestamp");
         let mut stmt = self.connection.prepare_cached(&sql)?;
 
-        let start_ts = start.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp();
-        let end_ts = end.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp();
+        let start_ts = start
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        let end_ts = end
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp() + self.period_step;
 
         stmt.query_map(params![ticker, start_ts, end_ts], |row| {
             let ts: i64 = row.get(0)?;
@@ -153,6 +165,13 @@ impl MarketData {
             Ok((datetime, values))
         })?
         .collect()
+    }
+
+    fn resolution_steps(resolution: &str) -> i64 {
+        match resolution {
+            "1d" => 86_400,
+            _ => unimplemented!("{resolution} is not supported")
+        }
     }
 
 }
@@ -173,10 +192,12 @@ mod tests {
         let end = NaiveDate::from_ymd_opt(2023, 1, 5).unwrap();
 
         let rows = md.fetch("AAPL", start, end)?;
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 3);
 
-        let expected_ts = Utc.with_ymd_and_hms(2023, 1, 3, 21, 0, 0).unwrap();
-        assert_eq!(rows[0].0, expected_ts);
+        let first_ts = Utc.with_ymd_and_hms(2023, 1, 3, 21, 0, 0).unwrap();
+        let last_ts = Utc.with_ymd_and_hms(2023, 1, 5, 21, 0, 0).unwrap();
+        assert_eq!(rows[0].0, first_ts);
+        assert_eq!(rows[2].0, last_ts);
 
         let approx = |a: f64, b: f64| (a - b).abs() < 1e-9;
         assert!(approx(rows[0].1[0], 130.279_998_779_296_88));

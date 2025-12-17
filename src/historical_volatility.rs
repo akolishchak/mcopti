@@ -64,7 +64,7 @@ mod tests {
     const FIXTURE_DIR: &str = "tests/fixtures";
 
     #[test]
-    fn rv_matches_python_reference_values() {
+    fn rv_matches_values() {
         let as_of = NaiveDate::from_ymd_opt(2023, 6, 30).unwrap();
         let hv = HistoricalVolatility::with_data_dir("MSFT", as_of, 160, FIXTURE_DIR);
 

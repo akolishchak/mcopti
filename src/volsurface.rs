@@ -13,6 +13,7 @@ const TAU_NODE_ATOL: f64 = 1e-10;
 const TAU_TAPER_WINDOW: f64 = 24.0 / (24.0 * 365.0);  // ~24 hours in year fraction
 
 const K_GRID: [f64; K_N] = linspace_array::<K_N>(K_MIN, K_MAX);
+const K_GRID_STEP: f64 = linspace_step(K_N, K_MIN, K_MAX);
 
 enum TauMonoMode {
     None,
@@ -148,6 +149,17 @@ impl VolSurface {
 
         let w = interp_linear(k, &K_GRID, &w_row);
         (w / tau.max(EPSILON)).sqrt().max(EPSILON)
+    }
+
+    pub fn iv_slope(&self, side: OptionType, tau: f64, k_target: f64) -> f64 {
+        let w_row = self.row(side, tau);
+        let dw_dk = gradient_uniform(&w_row, K_GRID_STEP);
+        let k_eval = k_target.clamp(K_MIN, K_MAX);
+        let w_val = interp_linear(k_eval, &K_GRID, &w_row);
+        let dw_val = interp_linear(k_eval, &K_GRID, &dw_dk);
+        let sigma = (w_val.max(EPSILON) / tau).sqrt();
+
+        dw_val / (2.0 * sigma * tau)
     }
 
 }
@@ -291,6 +303,22 @@ fn interp_linear(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
     fp[low] + t * (fp[high] - fp[low])
 }
 
+fn gradient_uniform(f: &[f64], h: f64) -> Vec<f64> {
+    let n = f.len();
+    assert!(n >= 2);
+
+    let mut grad = Vec::with_capacity(n);
+    grad.push((f[1] - f[0]) / h);
+    if n > 2 {
+        let inv_2h = 1.0 / (2.0 * h);
+        for w in f.windows(3) {
+            grad.push((w[2] - w[0]) * inv_2h);
+        }
+    }
+    grad.push((f[n-1] - f[n-2]) / h);
+    grad
+}
+
 const fn fill_linspace(out: &mut [f64], start: f64, end: f64) {
     let n = out.len();
     if n == 0 {
@@ -301,12 +329,16 @@ const fn fill_linspace(out: &mut [f64], start: f64, end: f64) {
         return;
     }
 
-    let step = (end - start) / ((n - 1) as f64);
+    let step = linspace_step(n, start, end);
     let mut i = 0;
     while i < n {
         out[i] = start + step * (i as f64);
         i += 1;
     }
+}
+
+const fn linspace_step(n: usize, start: f64, end: f64) -> f64 {
+    (end - start) / ((n - 1) as f64)
 }
 
 // Array version (compile-time size)
@@ -347,6 +379,48 @@ mod tests {
     fn tau_from(chain: &OptionChain, year: i32, month: u32, day: u32) -> f64 {
         let exp = NaiveDate::from_ymd_opt(year, month, day).expect("valid expiry date");
         (exp - chain.date).num_days() as f64 / 365.0
+    }
+
+    #[test]
+    fn iv_slope_matches_reference() {
+        let chain = load_arm_chain();
+        let surface = build_surface(&chain);
+        let spot = chain.last_price;
+
+        // Reference slopes pulled from the Python helper `_iv_slope` in
+        // src/probability_vol_110.py using the same ARM option chain fixture.
+        let cases = [
+            (
+                OptionType::Call,
+                140.0_f64,
+                tau_from(&chain, 2025, 10, 17),
+                -0.304_397_616_381_687_f64,
+            ),
+            (
+                OptionType::Put,
+                120.0_f64,
+                tau_from(&chain, 2025, 11, 21),
+                -0.205_017_703_325_62_f64,
+            ),
+            (OptionType::Call, 150.0_f64, 0.25_f64, -0.070_338_261_531_257_f64),
+            (OptionType::Put, 110.0_f64, 0.75_f64, -0.020_314_541_565_288_f64),
+        ];
+
+        let mut failures = Vec::new();
+        for (side, strike, tau, expected) in cases {
+            let k_target = (strike / spot).ln();
+            let slope = surface.iv_slope(side, tau, k_target);
+            let diff = (slope - expected).abs();
+            if diff >= 1e-9 {
+                failures.push(format!(
+                    "side {side:?} strike {strike} tau {tau} expected {expected} got {slope} diff {diff}"
+                ));
+            }
+        }
+
+        if !failures.is_empty() {
+            panic!("IV slope mismatches:\\n{}", failures.join("\\n"));
+        }
     }
 
     #[test]

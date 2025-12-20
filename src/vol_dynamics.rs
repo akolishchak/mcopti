@@ -9,10 +9,10 @@ pub fn vol_factor_table(ticker: &str, as_of: NaiveDate, volsurface: &VolSurface,
     let mut td = 0;
     let td_cum: Vec<_> = (1..=ncal_max)
         .map(|d| {
-        let day = as_of - Duration::days(d);
-        if calendar.is_trading_day(day) {
-            td += 1;
-        }
+            let day = as_of - Duration::days(d);
+            if calendar.is_trading_day(day) {
+                td += 1;
+            }
             td
         })
         .collect();

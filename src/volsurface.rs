@@ -23,7 +23,7 @@ enum TauMonoMode {
 }
 
 pub struct VolSurface {
-    spot: f64,
+    pub spot: f64,
     calls: TauLut,
     puts: TauLut,
 }

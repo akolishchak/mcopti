@@ -5,6 +5,7 @@ pub mod market_calendar;
 pub mod market_data;
 pub mod historical_volatility;
 pub mod option_math;
+pub mod vol_dynamics;
 
 pub use {
     option_chain::{OptionChain, OptionType},
@@ -14,4 +15,5 @@ pub use {
     market_data::{MarketData, Column},
     historical_volatility::HistoricalVolatility,
     option_math::{ncdf, bs_price, simulate_paths},
+    vol_dynamics::vol_factor_table,
 };

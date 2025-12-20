@@ -9,10 +9,10 @@ pub fn vol_factor_table(ticker: &str, as_of: NaiveDate, volsurface: &VolSurface,
     let mut td = 0;
     let td_cum: Vec<_> = (1..=ncal_max)
         .map(|d| {
-            let day = as_of - Duration::days(d);
-            if calendar.is_trading_day(day) {
-                td += 1;
-            }
+        let day = as_of - Duration::days(d);
+        if calendar.is_trading_day(day) {
+            td += 1;
+        }
             td
         })
         .collect();
@@ -100,21 +100,24 @@ mod tests {
 
     fn ensure_market_data_db() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let fixture_db = manifest_dir.join("tests/fixtures/market_data_1d.db");
+        assert!(
+            fixture_db.exists(),
+            "fixture market_data_1d.db is missing at {}",
+            fixture_db.display()
+        );
+
         let local_data_dir = manifest_dir.join("data");
         let local_db = local_data_dir.join("market_data_1d.db");
-        if let Ok(meta) = local_db.metadata() {
-            if meta.len() > 1024 * 1024 {
-                return;
-            }
-            let _ = fs::remove_file(&local_db);
+        let needs_copy = match (fixture_db.metadata(), local_db.metadata()) {
+            (Ok(f_meta), Ok(l_meta)) => f_meta.len() != l_meta.len(),
+            (Ok(_), Err(_)) => true,
+            _ => true,
+        };
+
+        if needs_copy {
+            fs::create_dir_all(&local_data_dir).expect("failed to create crate data directory");
+            fs::copy(&fixture_db, &local_db).expect("failed to copy fixture market data db");
         }
-
-        fs::create_dir_all(&local_data_dir).expect("failed to create crate data directory");
-
-        let workspace_db = manifest_dir
-            .parent()
-            .expect("workspace root")
-            .join("data/market_data_1d.db");
-        fs::copy(&workspace_db, &local_db).expect("failed to copy market data db for tests");
     }
 }

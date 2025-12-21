@@ -1,7 +1,7 @@
 
 use chrono::{NaiveDate, Duration};
 
-use crate::{HistoricalVolatility, VolSurface, OptionType, USMarketCalendar};
+use crate::{Column, HistoricalVolatility, MarketData, OptionType, USMarketCalendar, VolSurface};
 
 pub fn vol_factor_table(ticker: &str, as_of: NaiveDate, volsurface: &VolSurface, calendar: &USMarketCalendar, side: OptionType, ncal_max: i64, clamp: (f64, f64)) -> Vec<f64> {
 
@@ -29,6 +29,58 @@ pub fn vol_factor_table(ticker: &str, as_of: NaiveDate, volsurface: &VolSurface,
 
     f_by_day
 }
+
+pub fn mu_table(ticker: &str, as_of: NaiveDate, ncal_max: i64, clamp: (f64, f64)) -> Vec<f64> {
+    let md = MarketData::default_read("1d")
+        .unwrap()
+        .columns(&[Column::AdjClose]);
+
+    let start_date = as_of - Duration::days(ncal_max + 5);
+    let rows = md.fetch(ticker, start_date, as_of).unwrap();
+
+    if rows.is_empty() {
+        return vec![f64::NAN; ncal_max as usize + 1];
+    }
+
+    let (anchor_dt, anchor_vals) = rows.last().unwrap();
+    let anchor_date = anchor_dt.date_naive();
+    let anchor_close = anchor_vals[0];
+
+    // rows are sorted, unique, with sufficient history
+    let mut mu_by_day = vec![f64::NAN; ncal_max as usize + 1]; // idx 0 unused
+    let (lo, hi) = clamp;
+
+    let mut last_mu = f64::NAN;
+    let mut fill_start = 1;
+
+    // walk from most recent backward, filling calendar-day slots up to each span.
+    for (dt, values) in rows.iter().rev() {
+        let span_days = (anchor_date - dt.date_naive()).num_days() as usize;
+        if span_days == 0 {
+            continue;
+        }
+        let close = values[0];
+        last_mu = (anchor_close / close).ln() * 365.0 / span_days as f64;
+        last_mu = last_mu.clamp(lo, hi);
+
+        let end = span_days.min(ncal_max as usize);
+        if end >= fill_start {
+            mu_by_day[fill_start..=end].iter_mut().for_each(|slot| *slot = last_mu);
+            fill_start = end + 1;
+        }
+        if fill_start > ncal_max as usize {
+            break;
+        }
+    }
+
+    // ackfill beyond oldest row if needed.
+    mu_by_day[fill_start..=ncal_max as usize]
+        .iter_mut()
+        .for_each(|slot| *slot = last_mu);
+
+    mu_by_day
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -93,6 +145,59 @@ mod tests {
             let diff = (got - want).abs();
             assert!(
                 diff < 1e-9,
+                "calendar day {idx}: expected {want}, got {got}, diff {diff}"
+            );
+        }
+    }
+
+    #[test]
+    fn mu_table_matches_reference() {
+        ensure_market_data_db();
+        let as_of = NaiveDate::from_ymd_opt(2025, 9, 5).unwrap();
+        let mu = mu_table("ARM", as_of, 30, (-1.0, 0.5));
+
+        // Generated via src/probability_vol_110.py::build_mu_table on the same data slice.
+        let expected = [
+            f64::NAN,
+            0.5,
+            0.5,
+            0.5,
+            -0.05280648807325038,
+            -0.05280648807325038,
+            -0.05280648807325038,
+            -0.05280648807325038,
+            -1.0,
+            -0.7243570634459671,
+            -0.5479747236800254,
+            0.09379161150602244,
+            0.047215466048862384,
+            0.047215466048862384,
+            0.047215466048862384,
+            0.5,
+            0.5,
+            0.5,
+            -0.41976047663695426,
+            -0.09283983495103236,
+            -0.09283983495103236,
+            -0.09283983495103236,
+            -0.28334819345128853,
+            -0.3891443778134891,
+            -0.45754224736927523,
+            -0.3011930545071657,
+            -0.03109705896484995,
+            -0.03109705896484995,
+            -0.03109705896484995,
+            0.23909553691038646,
+            0.18186713933666795,
+        ];
+
+        assert_eq!(mu.len(), expected.len());
+        assert!(mu[0].is_nan());
+
+        for (idx, (&got, &want)) in mu.iter().zip(expected.iter()).enumerate().skip(1) {
+            let diff = (got - want).abs();
+            assert!(
+                diff < 1e-12,
                 "calendar day {idx}: expected {want}, got {got}, diff {diff}"
             );
         }

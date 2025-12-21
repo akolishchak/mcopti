@@ -30,6 +30,49 @@ pub fn vol_factor_table(ticker: &str, as_of: NaiveDate, volsurface: &VolSurface,
     f_by_day
 }
 
+pub fn mu_table(ticker: &str, as_of: NaiveDate, clamp: (f64, f64)) -> f64 {
+    // long-horizon trend: fit a single slope on log prices over a 120–250 trading day window
+    const MIN_LOOKBACK: usize = 120;
+    const MAX_LOOKBACK: usize = 250;
+
+    let md = MarketData::default_read("1d")
+        .unwrap()
+        .columns(&[Column::AdjClose]);
+
+    // fetch enough calendar days to cover the lookback band.
+    let lookback_calendar = MAX_LOOKBACK as i64 * 2;
+    let start_date = as_of - Duration::days(lookback_calendar);
+    let rows = md.fetch(ticker, start_date, as_of).unwrap();
+
+    if rows.len() < MIN_LOOKBACK {
+        return 0.0;
+    }
+
+    let window = rows.len().min(MAX_LOOKBACK);
+    let slice = &rows[rows.len() - window..];
+
+    let mut sum_t = 0.0;
+    let mut sum_log = 0.0;
+    let mut sum_tt = 0.0;
+    let mut sum_tlog = 0.0;
+
+    for (i, (_, values)) in slice.iter().enumerate() {
+        // trading-day clock: 252 trading days ~ 1 year
+        let t = i as f64 / 252.0;
+        let lp = values[0].ln();
+        sum_t += t;
+        sum_log += lp;
+        sum_tt += t * t;
+        sum_tlog += t * lp;
+    }
+
+    let n = window as f64;
+    let cov = sum_tlog - (sum_t * sum_log) / n;
+    let var_t = sum_tt - (sum_t * sum_t) / n;
+    let slope = if var_t > 0.0 { cov / var_t } else { 0.0 };
+    slope.clamp(clamp.0, clamp.1)
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -97,6 +140,21 @@ mod tests {
                 "calendar day {idx}: expected {want}, got {got}, diff {diff}"
             );
         }
+    }
+
+    #[test]
+    fn mu_table_matches_reference() {
+        ensure_market_data_db();
+        let as_of = NaiveDate::from_ymd_opt(2025, 9, 5).unwrap();
+        let mu = mu_table("ARM", as_of, (-0.3, 0.3));
+
+        // Expected drift from long-horizon log-slope (see src/probability_vol_110.py replacement).
+        let expected = -0.040_959_103_675_939_16;
+        let diff = (mu - expected).abs();
+        assert!(
+            diff < 1e-12,
+            "expected {expected}, got {mu}, diff {diff}"
+        );
     }
 
     fn ensure_market_data_db() {

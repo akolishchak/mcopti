@@ -19,9 +19,9 @@ pub struct RawOptionChain {
 /// A single option quote row.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct OptionContract {
-    #[serde(rename = "contractID")]
-    pub contract_id: String,
-    //pub symbol: String,
+    // #[serde(rename = "contractID")]
+    // pub contract_id: String,
+    // pub symbol: String,
     pub expiration: NaiveDate,
     #[serde(deserialize_with = "de_f64")]
     pub strike: f64,
@@ -368,10 +368,10 @@ mod tests {
         assert_eq!(exp_dates.len(), 2, "expected two expiration dates");
 
         // Spot check one call and one put to ensure numeric parsing.
-        let call = calls.iter().find(|c| c.contract_id.ends_with("190000")).unwrap();
+        let call = calls.iter().find(|c| c.strike == 190.0).unwrap();
         assert!((call.mark - 5.0).abs() < 1e-12);
         // bid_size/volume are unused in current pipeline; omitted from struct.
-        let put = puts.iter().find(|c| c.contract_id.ends_with("195000")).unwrap();
+        let put = puts.iter().find(|c| c.strike == 195.0).unwrap();
         assert!((put.delta + 0.42).abs() < 1e-12);
     }
 }

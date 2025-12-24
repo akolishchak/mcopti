@@ -11,7 +11,7 @@ pub struct OptionChain {
 }
 
 impl OptionChain {
-    pub fn from_raw(raw_option_chain: RawOptionChain) -> Self {
+    pub fn from_raw(raw_option_chain: &RawOptionChain) -> Self {
         let spot = raw_option_chain.last_price;
         let date = raw_option_chain.date;
 
@@ -132,7 +132,6 @@ mod tests {
     use chrono::NaiveDate;
 
     fn mk_contract(
-        contract_id: &str,
         trade_date: NaiveDate,
         expiration: NaiveDate,
         strike: f64,
@@ -142,7 +141,6 @@ mod tests {
         iv: f64,
     ) -> OptionContract {
         OptionContract {
-            contract_id: contract_id.to_string(),
             expiration,
             strike,
             option_type,
@@ -182,13 +180,13 @@ mod tests {
             date: trade_date,
             last_price: 100.0,
             data: vec![
-                mk_contract("C1", trade_date, exp_short, 100.0, OptionType::Call, 1.0, 1.2, 0.20),
-                mk_contract("C2", trade_date, exp_short, 105.0, OptionType::Call, 1.4, 1.8, 0.22),
-                mk_contract("C3", trade_date, exp_long, 110.0, OptionType::Call, 2.0, 2.6, 0.25),
+                mk_contract(trade_date, exp_short, 100.0, OptionType::Call, 1.0, 1.2, 0.20),
+                mk_contract(trade_date, exp_short, 105.0, OptionType::Call, 1.4, 1.8, 0.22),
+                mk_contract(trade_date, exp_long, 110.0, OptionType::Call, 2.0, 2.6, 0.25),
             ],
         };
 
-        let chain = OptionChain::from_raw(raw);
+        let chain = OptionChain::from_raw(&raw);
         let slices: Vec<_> = chain.calls.slices().collect();
 
         assert_eq!(slices.len(), 2, "expected two expiries");

@@ -88,7 +88,7 @@ mod tests {
 
         let chain_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(ARM_CHAIN_PATH);
         let raw_chain = parse_option_chain_file(chain_path).expect("failed to load option chain fixture");
-        let chain = OptionChain::from_raw(raw_chain);
+        let chain = OptionChain::from_raw(&raw_chain);
         let surface = VolSurface::new(&chain);
         let calendar = USMarketCalendar::new(2024, 2026);
         let as_of = NaiveDate::from_ymd_opt(2025, 9, 5).unwrap();

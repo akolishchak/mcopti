@@ -324,7 +324,7 @@ mod tests {
     fn load_arm_chain() -> OptionChain {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(ARM_CHAIN_PATH);
         let raw = parse_option_chain_file(path).expect("failed to load ARM chain fixture");
-        OptionChain::from_raw(raw)
+        OptionChain::from_raw(&raw)
     }
 
     fn build_surface(chain: &OptionChain) -> VolSurface {

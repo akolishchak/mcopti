@@ -1,4 +1,4 @@
-use crate::{OptionChain, OptionType, Pchip};
+use crate::{OptionChain, OptionChainSide, OptionType, Pchip};
 use std::borrow::Cow;
 
 const EPSILON: f64 = 1e-12;
@@ -30,29 +30,11 @@ pub struct VolSurface {
 
 impl VolSurface {
     pub fn new(option_chain: &OptionChain) -> Self {
-        let spot = option_chain.last_price;
-        let chain_date = option_chain.date;
+        let spot = option_chain.spot;
 
-        let n_calls = option_chain.data.iter().filter(|c| matches!(c.option_type, OptionType::Call)).count();
-        let n_puts = option_chain.data.len() - n_calls;
-
-        let mut calls = TauLut::with_capacity(n_calls);
-        let mut puts = TauLut::with_capacity(n_puts);
-
-        for contract in &option_chain.data {
-            let tau = (contract.expiration - chain_date).num_days() as f64 / 365.0;
-            let k = (contract.strike / spot).ln();
-            let iv = contract.implied_volatility;
-
-            match contract.option_type {
-                OptionType::Call => calls.push(tau, k, iv),
-                OptionType::Put => puts.push(tau, k, iv),
-            }
-        }
-
-        // Precompute LUTs so the surface is ready for queries.
-        calls.build();
-        puts.build();
+        // Precompute LUTs from the already bucketed chain sides.
+        let calls = TauLut::from_side(&option_chain.calls);
+        let puts = TauLut::from_side(&option_chain.puts);
 
         Self {
             spot,
@@ -172,61 +154,36 @@ struct TauLut {
     pub w_mon: Vec<f64>,
     pub tmin: f64,
     pub tmax: f64,
-    tau_range: Vec<(usize, usize)>,
-    k: Vec<f64>,
-    iv: Vec<f64>,
-    index: usize,
-    last_tau: Option<f64>,
 }
 
 impl TauLut {
-    fn with_capacity(capacity: usize) -> Self {
-        Self {
-            tau: Vec::with_capacity(capacity),
-            tau_range: Vec::with_capacity(capacity),
+    fn from_side(side: &OptionChainSide) -> Self {
+        let mut lut = Self {
+            tau: side.tau().to_vec(),
             w_raw_lut: Vec::new(),
             w_mon_lut: Vec::new(),
             w_raw: Vec::new(),
             w_mon: Vec::new(),
             tmin: 0.0,
             tmax: 0.0,
-            k: Vec::with_capacity(capacity),
-            iv: Vec::with_capacity(capacity),
-            index: 0,
-            last_tau: None,
-        }
+        };
+        lut.build(side);
+        lut
     }
 
-    fn push(&mut self, tau: f64, k: f64, iv: f64) {
-        let is_new_tau = self.last_tau.map_or(true, |last_tau| (tau - last_tau).abs() > EPSILON);
-
-        if is_new_tau {
-            self.tau.push(tau);
-            self.tau_range.push((self.index, self.index + 1));
-            self.last_tau = Some(tau);
-        } else if let Some(last) = self.tau_range.last_mut() {
-            last.1 = self.index + 1;
-        }
-        self.k.push(k);
-        self.iv.push(iv);
-        self.index += 1;
-    }
-
-    fn build(&mut self) {
+    fn build(&mut self, side: &OptionChainSide) {
+        self.tau = side.tau().to_vec();
         let n_tau = self.tau.len();
         let k_n = K_GRID.len();
 
         self.w_raw.clear();
         // [n_tau * K_N]
         self.w_raw.reserve(n_tau * k_n);
-        for (&t, range) in self.tau.iter().zip(self.tau_range.iter()) {
-            let k = &self.k[range.0..range.1];
-            let iv = &self.iv[range.0..range.1];
-
-            let w: Vec<_> = iv.iter()
-                .map(|&iv_i| iv_i * iv_i * t)
+        for bucket in side.slices() {
+            let w: Vec<_> = bucket.iv.iter()
+                .map(|&iv_i| iv_i * iv_i * bucket.tau)
                 .collect();
-            let pchip = Pchip::new(k, w.as_slice())
+            let pchip = Pchip::new(bucket.k, w.as_slice())
                 .expect("Failed to create PCHIP interpolant");
 
             self.w_raw.extend(K_GRID.iter().map(|&k| pchip.eval(k).max(EPSILON)));
@@ -358,7 +315,7 @@ pub fn linspace_vec(start: f64, end: f64, n: usize) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::option_chain::parse_option_chain_file;
+    use crate::raw_option_chain::parse_option_chain_file;
     use chrono::NaiveDate;
     use std::path::PathBuf;
 
@@ -366,14 +323,12 @@ mod tests {
 
     fn load_arm_chain() -> OptionChain {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(ARM_CHAIN_PATH);
-        parse_option_chain_file(path).expect("failed to load ARM chain fixture")
+        let raw = parse_option_chain_file(path).expect("failed to load ARM chain fixture");
+        OptionChain::from_raw(raw)
     }
 
     fn build_surface(chain: &OptionChain) -> VolSurface {
-        let mut surface = VolSurface::new(chain);
-        surface.calls.build();
-        surface.puts.build();
-        surface
+        VolSurface::new(chain)
     }
 
     fn tau_from(chain: &OptionChain, year: i32, month: u32, day: u32) -> f64 {
@@ -385,7 +340,7 @@ mod tests {
     fn iv_slope_matches_reference() {
         let chain = load_arm_chain();
         let surface = build_surface(&chain);
-        let spot = chain.last_price;
+        let spot = chain.spot;
 
         // Reference slopes pulled from the Python helper `_iv_slope` in
         // src/probability_vol_110.py using the same ARM option chain fixture.

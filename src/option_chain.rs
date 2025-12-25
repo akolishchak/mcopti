@@ -63,10 +63,6 @@ pub struct OptionSlice<'a> {
 }
 
 impl OptionChainSide {
-    pub(crate) fn tau(&self) -> &[f64] {
-        &self.tau
-    }
-
     fn new(spot: f64, date: NaiveDate, capacity: usize) -> Self {
         Self {
             expire: Vec::with_capacity(capacity),
@@ -120,6 +116,25 @@ impl OptionChainSide {
                 mid: &self.mid[start..end],
                 iv: &self.iv[start..end],
             })
+    }
+
+    pub fn tau(&self) -> &[f64] {
+        &self.tau
+    }
+
+    pub fn expire_id(&self, expire: NaiveDate) -> Option<usize> {
+        match self.expire.binary_search(&expire) {
+            Ok(id) => Some(id),
+            Err(_) => None,
+        }
+    }
+
+    pub fn strike(&self, strike: f64, expire_id: usize) -> Option<(f64, f64)> {
+        let (start, end) = self.tau_range[expire_id];
+        match self.strike[start..end].binary_search_by(|v| v.total_cmp(&strike)) {
+            Ok(id) => Some((self.mid[id], self.iv[id])),
+            Err(_) => None
+        }
     }
 
 }

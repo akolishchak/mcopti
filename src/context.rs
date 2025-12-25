@@ -3,10 +3,10 @@ use crate::{VolSurface, USMarketCalendar, OptionChain, RawOptionChain};
 
 
 pub struct Context {
-    ticker: String,
-    option_chain: OptionChain,
-    vol_surface: VolSurface,
-    calendar: USMarketCalendar,
+    pub ticker: String,
+    pub option_chain: OptionChain,
+    pub vol_surface: VolSurface,
+    pub calendar: USMarketCalendar,
 }
 
 impl Context {

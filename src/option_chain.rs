@@ -105,12 +105,13 @@ impl OptionChainSide {
 
     /// Iterate over each maturity, yielding slices into the per-quote arrays.
     pub fn slices(&self) -> impl Iterator<Item = OptionSlice<'_>> {
-        self.tau_range
+        self.expire
             .iter()
-            .enumerate()
-            .map(move |(i, &(start, end))| OptionSlice {
-                expire: self.expire[i],
-                tau: self.tau[i],
+            .zip(self.tau.iter())
+            .zip(self.tau_range.iter())
+            .map(move |((&expire, &tau), &(start, end))| OptionSlice {
+                expire,
+                tau,
                 strike: &self.strike[start..end],
                 k: &self.k[start..end],
                 mid: &self.mid[start..end],
@@ -138,7 +139,6 @@ impl OptionChainSide {
     }
 
 }
-
 
 
 #[cfg(test)]

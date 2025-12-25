@@ -62,7 +62,7 @@ pub struct OptionContract {
     // pub intrinsic_value: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OptionType {
     Call,

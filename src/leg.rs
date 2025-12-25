@@ -1,5 +1,3 @@
-use core::fmt;
-
 use chrono::NaiveDate;
 
 use crate::{OptionType, Context};

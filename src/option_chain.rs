@@ -49,7 +49,7 @@ pub struct OptionChainSide {
     date: NaiveDate,
     tau_range: Vec<(usize, usize)>,
     index: usize,
-    last_tau: Option<f64>,
+    last_expire: Option<NaiveDate>,
 }
 
 /// View over all quotes that share the same expiry/τ.
@@ -75,7 +75,7 @@ impl OptionChainSide {
             date: date,
             tau_range: Vec::with_capacity(capacity),
             index: 0,
-            last_tau: None,
+            last_expire: None,
         }
     }
 
@@ -86,13 +86,14 @@ impl OptionChainSide {
         let iv = contract.implied_volatility;
         let mid = (contract.ask + contract.bid) * 0.5;
 
-        let is_new_tau = self.last_tau.map_or(true, |last_tau| (tau - last_tau).abs() > EPSILON);
+        let is_new_expire = self.last_expire
+            .map_or(true, |last_expire| last_expire != contract.expiration);
 
-        if is_new_tau {
+        if is_new_expire {
             self.expire.push(contract.expiration);
             self.tau.push(tau);
             self.tau_range.push((self.index, self.index + 1));
-            self.last_tau = Some(tau);
+            self.last_expire = Some(contract.expiration);
         } else if let Some(last) = self.tau_range.last_mut() {
             last.1 = self.index + 1;
         }

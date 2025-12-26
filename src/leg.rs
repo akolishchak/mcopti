@@ -7,6 +7,7 @@ use crate::{OptionType, Context};
 pub struct Leg {
     pub option_type: OptionType,
     pub strike: f64,
+    pub expire: NaiveDate,
     pub expire_id: usize,
     pub mid: f64,
     pub iv: f64,
@@ -40,6 +41,7 @@ impl<'a> LegBuilder<'a> {
         Ok(Leg {
             option_type,
             strike,
+            expire,
             expire_id,
             mid,
             iv,

@@ -5,6 +5,8 @@ use crate::{Leg, OptionType, Position};
 pub struct LegUniverse {
     pub legs: Vec<Leg>,
     pub max_expire: NaiveDate,
+    pub call_present: bool,
+    pub put_present: bool,
     type_range: Vec<(usize, usize)>,
     expiry_range: Vec<(usize, usize)>,
 }
@@ -28,6 +30,8 @@ impl LegUniverse {
             .sum();
         let mut legs: Vec<Leg> = Vec::with_capacity(capacity);
         let mut max_expire = NaiveDate::MIN;
+        let mut call_present = false;
+        let mut put_present = false;
 
         for position in positions {
             for &(leg, _) in position.legs.iter() {
@@ -38,6 +42,10 @@ impl LegUniverse {
                 });
 
                 if !exists {
+                    match &leg.option_type {
+                        OptionType::Call => call_present = true,
+                        OptionType::Put => put_present = true,
+                    }
                     legs.push(leg);
                     max_expire = max_expire.max(leg.expire);
                 }
@@ -77,6 +85,8 @@ impl LegUniverse {
         Self { 
             legs,
             max_expire,
+            call_present,
+            put_present,
             type_range,
             expiry_range,
         }

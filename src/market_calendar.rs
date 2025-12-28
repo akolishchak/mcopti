@@ -1,5 +1,7 @@
-use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Weekday};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeDelta, TimeZone, Weekday};
 use chrono_tz::{America::New_York, Tz};
+
+pub type MarketCalendar = USMarketCalendar;
 
 pub struct USMarketCalendar {
     start_year: i32,
@@ -94,6 +96,10 @@ impl USMarketCalendar {
             Duration::minutes(6*60+30) // 4:00 PM
         };
         (open_dt, close_dt)
+    }
+
+    pub fn max_session_mins(&self) -> i64 {
+        6*60+30
     }
 
     fn observed(date: NaiveDate) -> NaiveDate {

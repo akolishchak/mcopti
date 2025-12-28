@@ -1,9 +1,9 @@
 
 use chrono::{NaiveDate, Duration};
 
-use crate::{Column, HistoricalVolatility, MarketData, OptionType, USMarketCalendar, VolSurface};
+use crate::{Column, HistoricalVolatility, MarketData, OptionType, MarketCalendar, VolSurface};
 
-pub fn vol_factor_table(ticker: &str, as_of: NaiveDate, volsurface: &VolSurface, calendar: &USMarketCalendar, side: OptionType, ncal_max: i64, clamp: (f64, f64)) -> Vec<f64> {
+pub fn vol_factor_table(ticker: &str, as_of: NaiveDate, volsurface: &VolSurface, calendar: &MarketCalendar, side: OptionType, ncal_max: i64, clamp: (f64, f64)) -> Vec<f64> {
 
     let hv = HistoricalVolatility::new(ticker, as_of, ncal_max);
     let mut td = 0;
@@ -90,7 +90,7 @@ mod tests {
         let raw_chain = parse_option_chain_file(chain_path).expect("failed to load option chain fixture");
         let chain = OptionChain::from_raw(&raw_chain);
         let surface = VolSurface::new(&chain);
-        let calendar = USMarketCalendar::new(2024, 2026);
+        let calendar = MarketCalendar::new(2024, 2026);
         let as_of = NaiveDate::from_ymd_opt(2025, 9, 5).unwrap();
 
         let factors = vol_factor_table("ARM", as_of, &surface, &calendar, OptionType::Call, 30, (0.5, 3.0));

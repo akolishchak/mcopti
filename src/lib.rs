@@ -13,13 +13,14 @@ pub mod position;
 pub mod leg_universe;
 pub mod scenario;
 pub mod simulator;
+pub mod config;
 
 pub use {
     raw_option_chain::{RawOptionChain, OptionType},
     option_chain::{OptionChain, OptionChainSide},
     volsurface::VolSurface,
     pchip::Pchip,
-    market_calendar::USMarketCalendar,
+    market_calendar::MarketCalendar,
     market_data::{MarketData, Column},
     historical_volatility::HistoricalVolatility,
     option_math::{ncdf, bs_price, simulate_paths},
@@ -30,4 +31,5 @@ pub use {
     leg_universe::LegUniverse,
     scenario::Scenario,
     simulator::Simulator,
+    config::{Config, DEFAULT_CONFIG},
 };

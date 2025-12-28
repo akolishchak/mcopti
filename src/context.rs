@@ -1,12 +1,13 @@
 use chrono::Datelike;
-use crate::{VolSurface, USMarketCalendar, OptionChain, RawOptionChain};
+use crate::{Config, DEFAULT_CONFIG, OptionChain, RawOptionChain, MarketCalendar, VolSurface};
 
 
 pub struct Context {
     pub ticker: String,
     pub option_chain: OptionChain,
     pub vol_surface: VolSurface,
-    pub calendar: USMarketCalendar,
+    pub calendar: MarketCalendar,
+    pub config: Config,
 }
 
 impl Context {
@@ -14,13 +15,14 @@ impl Context {
         let option_chain = OptionChain::from_raw(raw_option_chain);
         let vol_surface = VolSurface::new(&option_chain);
         let year = raw_option_chain.date.year();
-        let calendar = USMarketCalendar::new(year, year+1);
+        let calendar = MarketCalendar::new(year, year+1);
 
         Self {
             ticker: ticker.to_string(),
             option_chain,
             vol_surface,
             calendar,
+            config: DEFAULT_CONFIG,
         }
     }
 

@@ -65,26 +65,26 @@ impl Scenario {
         let factor_clamp = &context.config.factor_clamp;
         let f_by_day = vol_factor_table(&context.ticker, start_date, vol_surface, calendar, side, ncal_max, *factor_clamp);
 
+        let iv_level_clamp = &context.config.iv_level_clamp;
+        let iv_mult_path: Vec<_> = f_by_day.iter()
+            .map(|f| f.clamp(iv_level_clamp.0, iv_level_clamp.1))
+            .collect();
+
         // Real-world drift: long-horizon log-slope; fallback to 0 if unavailable
         let mu_tred = mu_table(&context.ticker, start_date, (-0.3, 0.3));
 
         let s0 = context.option_chain.spot;
         // TODO: per-strategy strikes, e.g. short strike fro spreads
         let s_iv_floor = s0 * context.config.iv_floor;
-        // iv_atm_path
-        let iv_src: Vec<_> = tau_driver.iter()
-            .map(|&tau|
-                vol_surface.iv(side, tau, s0)
-                    .max(vol_surface.iv(side, tau, s_iv_floor)))
-            .collect();
-
         let sigma_cal_path: Vec<_> = tau_driver
             .iter()
-            .zip(iv_src.iter())
-            .map(|(&tau, &iv)| {
-                let d = ((tau * 365.0).round().max(1.0)) as i32; // match Python: >=1 day
+            .map(|&tau| {
+                let iv = vol_surface
+                    .iv(side, tau, s0)
+                    .max(vol_surface.iv(side, tau, s_iv_floor));
+                let d = ((tau * 365.0).round().max(1.0)) as i32;
                 let idx = d.clamp(1, (f_by_day.len() - 1) as i32) as usize;
-                f_by_day[idx] * iv
+                (f_by_day[idx] * iv).clamp(1e-6, 5.0)
             })
             .collect();
         

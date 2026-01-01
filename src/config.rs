@@ -7,6 +7,7 @@ pub struct Config {
     pub iv_level_clamp: (f64, f64),
     pub epsilon: f64,
     pub iv_floor: f64,
+    pub seed: u64,
 }
 
 pub const DEFAULT_CONFIG: Config = Config::default();
@@ -20,6 +21,7 @@ impl Config {
             iv_level_clamp: (0.8, 2.0),
             epsilon: 1e-12,
             iv_floor: 0.90,
+            seed: 7,
         }
     }
 }

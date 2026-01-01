@@ -1,6 +1,6 @@
 use chrono::Duration;
 
-use crate::{Context, LegUniverse, OptionType, vol_dynamics::mu_table, vol_factor_table};
+use crate::{Context, LegUniverse, OptionType, vol_dynamics::mu_table, vol_factor_table, simulate_paths};
 
 const SECONDS_PER_YEAR: f64 = 365.0 * 24.0 * 3600.0;
 const MINUTES_PER_DAY: f64 = 24.0 * 60.0;
@@ -9,10 +9,8 @@ const OVERNIGHT_VAR_FRACTION: f64 = 0.30;
 pub struct Scenario {
     pub dt_years: Vec<f64>,
     pub tau_driver: Vec<f64>,
-    pub sigma_cal_path: Vec<f64>,
-    pub sigma_eff: Vec<f64>,
     pub iv_mult_path: Vec<f64>,
-    pub mu_trend: f64,
+    pub s_path: Vec<f64>,
 }
 
 impl Scenario {
@@ -23,15 +21,23 @@ impl Scenario {
         let (_, expiry_close) = calendar.session(expiry_date);
         let step_minutes = context.config.step_minutes;
         let days_to_expiry = (expiry_date - start_date).num_days();
-        let capacity = days_to_expiry * context.calendar.max_session_mins() / step_minutes + days_to_expiry;
+        let capacity = (
+            days_to_expiry * context.calendar.max_session_mins()
+            / step_minutes + days_to_expiry
+        ) as usize;
+        let paths = context.config.paths;
+        let seed = Some(context.config.seed);
 
-        let mut dt_years = Vec::with_capacity(capacity as usize);
-        let mut tau_driver = Vec::with_capacity(capacity as usize);
-        let mut sigma_cal_path = Vec::with_capacity(capacity as usize);
-        let mut iv_mult_path = Vec::with_capacity(capacity as usize);
-        let mut sigma_eff = Vec::with_capacity(capacity as usize);
+        let mut dt_years = Vec::with_capacity(capacity);
+        let mut tau_driver = Vec::with_capacity(capacity);
+        let mut sigma_cal_path = Vec::with_capacity(capacity);
+        let mut iv_mult_path = Vec::with_capacity(capacity);
+        let mut sigma_eff = Vec::with_capacity(capacity);
         // Reused buffer for per-day median; keeps allocations off the hot path.
         let mut median_buf = Vec::with_capacity(64);
+
+        let mut drift_arr = Vec::with_capacity(capacity);
+        let mut vol_arr = Vec::with_capacity(capacity);
 
         // TODO: consider storing shocks once and deriving S paths deterministically for both sides
         let side = if leg_universe.put_present { OptionType::Put } else { OptionType::Call };
@@ -130,9 +136,17 @@ impl Scenario {
             day = next_day;
         }
 
+        // Compute per-step GBM parameters using filled sigma_eff.
+        for (&dt, &sigma) in dt_years.iter().zip(sigma_eff.iter()) {
+            let drift = (mu_trend - 0.5 * sigma * sigma) * dt;
+            let vol = sigma * dt.sqrt();
+            drift_arr.push(drift);
+            vol_arr.push(vol);
+        }
 
+        let s_path = simulate_paths(s0, &drift_arr, &vol_arr, paths, seed);
 
-        Self { dt_years, tau_driver, sigma_cal_path, sigma_eff, iv_mult_path, mu_trend }
+        Self { dt_years, tau_driver, iv_mult_path, s_path }
     }
 }
 

@@ -152,7 +152,7 @@ impl Scenario {
             day = next_day;
         }
 
-        // Stream simulation to avoid extra drift/vol buffers.
+        // s path simulation
         let steps = sigma_eff.len();
         let mut rng = match seed {
             Some(s) => Xoshiro256PlusPlus::seed_from_u64(s),

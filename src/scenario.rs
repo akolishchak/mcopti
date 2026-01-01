@@ -1,13 +1,16 @@
 use chrono::Duration;
+use rand::{Rng, SeedableRng};
+use rand_distr::StandardNormal;
+use rand_xoshiro::Xoshiro256PlusPlus;
 
-use crate::{Context, LegUniverse, OptionType, vol_dynamics::mu_table, vol_factor_table, simulate_paths};
+use crate::{Context, LegUniverse, OptionType, vol_dynamics::mu_table, vol_factor_table};
 
 const SECONDS_PER_YEAR: f64 = 365.0 * 24.0 * 3600.0;
 const MINUTES_PER_DAY: f64 = 24.0 * 60.0;
 const OVERNIGHT_VAR_FRACTION: f64 = 0.30;
 
 pub struct Scenario {
-    pub dt_years: Vec<f64>,
+    pub dt_years: Vec<f64>, // aka dt_arr: per-step durations in years
     pub tau_driver: Vec<f64>,
     pub iv_mult_path: Vec<f64>,
     pub s_path: Vec<f64>,
@@ -30,14 +33,10 @@ impl Scenario {
 
         let mut dt_years = Vec::with_capacity(capacity);
         let mut tau_driver = Vec::with_capacity(capacity);
-        let mut sigma_cal_path = Vec::with_capacity(capacity);
         let mut iv_mult_path = Vec::with_capacity(capacity);
         let mut sigma_eff = Vec::with_capacity(capacity);
         // Reused buffer for per-day median; keeps allocations off the hot path.
         let mut median_buf = Vec::with_capacity(64);
-
-        let mut drift_arr = Vec::with_capacity(capacity);
-        let mut vol_arr = Vec::with_capacity(capacity);
 
         // TODO: consider storing shocks once and deriving S paths deterministically for both sides
         let side = if leg_universe.put_present { OptionType::Put } else { OptionType::Call };
@@ -86,7 +85,6 @@ impl Scenario {
                 let sigma = (f_by_day[idx] * iv).clamp(1e-6, 5.0);
                 let iv_mult = (sigma / iv.max(1e-8)).clamp(iv_level_clamp.0, iv_level_clamp.1);
 
-                sigma_cal_path.push(sigma);
                 iv_mult_path.push(iv_mult);
                 sigma_eff.push(0.0); // placeholder, filled per-day below
                 intraday_minutes += (next - t).as_seconds_f64() / 60.0;
@@ -99,7 +97,15 @@ impl Scenario {
             let mut day_end = intra_end;
 
             if day == expiry_date {
-                fill_sigma_eff(day_start, intra_end, day_end, intraday_minutes, &dt_years, &sigma_cal_path, &mut sigma_eff, &mut median_buf);
+                fill_sigma_eff(
+                    day_start,
+                    intra_end,
+                    day_end,
+                    intraday_minutes,
+                    &dt_years,
+                    &mut sigma_eff,
+                    &mut median_buf,
+                );
                 break;
             }
 
@@ -122,29 +128,47 @@ impl Scenario {
                 let sigma = (f_by_day[idx] * iv).clamp(1e-6, 5.0);
                 let iv_mult = (sigma / iv.max(1e-8)).clamp(iv_level_clamp.0, iv_level_clamp.1);
 
-                sigma_cal_path.push(sigma);
                 iv_mult_path.push(iv_mult);
                 sigma_eff.push(0.0); // overnight gap step already ends at next open
-                day_end = sigma_cal_path.len();
+                if intraday_minutes <= 0.0 {
+                    median_buf.push(sigma);
+                }
+                day_end = sigma_eff.len();
 
                 day_end
             } else {
                 intra_end
             };
 
-            fill_sigma_eff(day_start, intra_end, end, intraday_minutes, &dt_years, &sigma_cal_path, &mut sigma_eff, &mut median_buf);
+            fill_sigma_eff(
+                day_start,
+                intra_end,
+                end,
+                intraday_minutes,
+                &dt_years,
+                &mut sigma_eff,
+                &mut median_buf,
+            );
             day = next_day;
         }
 
-        // Compute per-step GBM parameters using filled sigma_eff.
-        for (&dt, &sigma) in dt_years.iter().zip(sigma_eff.iter()) {
-            let drift = (mu_trend - 0.5 * sigma * sigma) * dt;
-            let vol = sigma * dt.sqrt();
-            drift_arr.push(drift);
-            vol_arr.push(vol);
+        // Stream simulation to avoid extra drift/vol buffers.
+        let steps = sigma_eff.len();
+        let mut rng = match seed {
+            Some(s) => Xoshiro256PlusPlus::seed_from_u64(s),
+            None => Xoshiro256PlusPlus::from_os_rng(),
+        };
+        let mut s_path = Vec::with_capacity(paths * steps);
+        for _ in 0..paths {
+            let mut log_price = s0.ln();
+            for (&sigma, &dt) in sigma_eff.iter().zip(dt_years.iter()) {
+                let vol = sigma * dt.sqrt();
+                let drift = (mu_trend - 0.5 * sigma * sigma) * dt;
+                let rand: f64 = rng.sample(StandardNormal);
+                log_price += rand * vol + drift;
+                s_path.push(log_price.exp());
+            }
         }
-
-        let s_path = simulate_paths(s0, &drift_arr, &vol_arr, paths, seed);
 
         Self { dt_years, tau_driver, iv_mult_path, s_path }
     }
@@ -156,19 +180,11 @@ fn fill_sigma_eff(
     end: usize,
     intraday_minutes: f64,
     dt_years: &[f64],
-    sigma_cal_path: &[f64],
     sigma_eff: &mut [f64],
     median_buf: &mut Vec<f64>,
 ) {
-    // median_buf is mutated; callers pass a reusable buffer to avoid allocations.
-    let sigma_day = if intraday_minutes > 0.0 && intra_end > start && !median_buf.is_empty() {
-        median_inplace(median_buf)
-    } else {
-        median_buf.clear();
-        median_buf.extend_from_slice(&sigma_cal_path[start..end]);
-        median_inplace(median_buf)
-    }
-    .unwrap_or(0.2);
+    // median_buf holds the sigma samples for this day; it is mutated in place.
+    let sigma_day = median_inplace(median_buf).unwrap_or(0.2);
 
     if intraday_minutes <= 0.0 {
         for slot in &mut sigma_eff[start..end] {

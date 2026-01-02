@@ -218,3 +218,108 @@ fn median_inplace(buf: &mut Vec<f64>) -> Option<f64> {
         Some((lower_max + buf[mid]) * 0.5)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        config::{Config, DEFAULT_CONFIG},
+        context::Context,
+        leg::LegBuilder,
+        leg_universe::LegUniverse,
+        position::Position,
+        raw_option_chain::parse_option_chain_file,
+        OptionType,
+    };
+    use chrono::NaiveDate;
+    use serde::Deserialize;
+    use std::{fs, path::PathBuf};
+
+    const REF_JSON: &str = include_str!("../tests/fixtures/scenario_reference.json");
+
+    #[derive(Deserialize)]
+    struct Reference {
+        dt_years: Vec<f64>,
+        tau_left: Vec<f64>,
+        iv_mult_path: Vec<f64>,
+        s_path: Vec<Vec<f64>>,
+    }
+
+    #[test]
+    fn scenario_paths_match_reference_surface_and_shocks() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        ensure_market_data_db(&manifest_dir);
+
+        let chain_path = manifest_dir.join("tests/fixtures/ARM_option_chain_20250908_160038.json");
+        let raw_chain = parse_option_chain_file(&chain_path).expect("failed to load option chain fixture");
+        let mut context = Context::from_raw_option_chain("ARM", &raw_chain);
+        context.config = Config {
+            paths: 2,
+            seed: 7,
+            iv_floor: 1.0,
+            ..DEFAULT_CONFIG
+        };
+
+        let expiry = NaiveDate::from_ymd_opt(2025, 9, 12).unwrap();
+        let builder = LegBuilder::new(&context);
+        let short = builder
+            .create(OptionType::Call, 150.0, expiry)
+            .expect("missing short leg");
+        let long = builder
+            .create(OptionType::Call, 155.0, expiry)
+            .expect("missing long leg");
+
+        let mut position = Position::new();
+        position.push(short, -1);
+        position.push(long, 1);
+        let leg_universe = LegUniverse::from_positions(&[position]);
+
+        let scenario = Scenario::new(&context, &leg_universe);
+        let steps = scenario.dt_years.len();
+        let paths = context.config.paths;
+
+        let reference: Reference = serde_json::from_str(REF_JSON).expect("failed to parse reference fixture");
+
+        assert_eq!(steps, reference.dt_years.len());
+        assert_eq!(scenario.tau_driver.len(), steps);
+        assert_eq!(scenario.iv_mult_path.len(), steps);
+        assert_eq!(scenario.s_path.len(), steps * paths);
+
+        assert_close_slice(&scenario.dt_years, &reference.dt_years, 1e-12, "dt_years");
+        assert_close_slice(&scenario.tau_driver, &reference.tau_left, 1e-12, "tau_driver");
+        assert_close_slice(&scenario.iv_mult_path, &reference.iv_mult_path, 1e-12, "iv_mult_path");
+
+        // s_path uses a different RNG stream than the Python run that produced the fixture,
+        // so we only sanity-check shape/positivity instead of exact values.
+        assert_eq!(scenario.s_path.len(), paths * steps);
+        assert!(scenario.s_path.iter().all(|v| v.is_finite() && *v > 0.0));
+    }
+
+    fn assert_close_slice(got: &[f64], want: &[f64], tol: f64, label: &str) {
+        assert_eq!(got.len(), want.len(), "{label} length mismatch");
+        for (idx, (&g, &w)) in got.iter().zip(want.iter()).enumerate() {
+            let diff = (g - w).abs();
+            assert!(
+                diff < tol,
+                "{label}[{idx}] mismatch: expected {w}, got {g}, diff {diff}"
+            );
+        }
+    }
+
+    fn ensure_market_data_db(manifest_dir: &PathBuf) {
+        let fixture_db = manifest_dir.join("tests/fixtures/market_data_1d.db");
+        let local_db = manifest_dir.join("data/market_data_1d.db");
+        let needs_copy = match (fs::metadata(&fixture_db), fs::metadata(&local_db)) {
+            (Ok(f_meta), Ok(l_meta)) => f_meta.len() != l_meta.len(),
+            (Ok(_), Err(_)) => true,
+            _ => true,
+        };
+
+        if needs_copy {
+            if let Some(parent) = local_db.parent() {
+                fs::create_dir_all(parent).expect("failed to create data dir");
+            }
+            fs::copy(&fixture_db, &local_db).expect("failed to copy fixture market data db");
+        }
+    }
+}

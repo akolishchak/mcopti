@@ -243,6 +243,10 @@ impl TauLut {
     }
 }
 
+pub fn interp_linear_kgrid(x: f64, fp: &[f64]) -> f64 {
+    interp_linear(x, &K_GRID, fp)
+}
+
 fn interp_linear(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
     let n = xp.len();
     assert!(n >= 2, "xp must have at least two points");

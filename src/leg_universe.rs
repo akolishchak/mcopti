@@ -7,6 +7,7 @@ pub struct LegUniverse {
     pub max_expire: NaiveDate,
     pub call_present: bool,
     pub put_present: bool,
+    pub positions_idx: Vec<Vec<(usize, i64)>>,
     type_range: Vec<(usize, usize)>,
     expiry_range: Vec<(usize, usize)>,
 }
@@ -29,27 +30,33 @@ impl LegUniverse {
             .map(|p| p.legs.len())
             .sum();
         let mut legs: Vec<Leg> = Vec::with_capacity(capacity);
+        let mut positions_idx = Vec::with_capacity(capacity);
         let mut max_expire = NaiveDate::MIN;
         let mut call_present = false;
         let mut put_present = false;
 
         for position in positions {
-            for &(leg, _) in position.legs.iter() {
-                let exists = legs.iter().any(|existing| {
-                    existing.expire_id == leg.expire_id
-                    && existing.option_type == leg.option_type
-                    && existing.strike == leg.strike
+            let mut position_legs = Vec::with_capacity(position.legs.len());
+            for &(leg, qty) in position.legs.iter() {
+                let unique_leg = legs.iter().enumerate().find(|&(idx, unique_leg)| {
+                    unique_leg.expire_id == leg.expire_id
+                    && unique_leg.option_type == leg.option_type
+                    && unique_leg.strike == leg.strike
                 });
 
-                if !exists {
+                if let Some((idx, _)) = unique_leg {
+                    position_legs.push((idx, qty));
+                } else {
                     match &leg.option_type {
                         OptionType::Call => call_present = true,
                         OptionType::Put => put_present = true,
                     }
+                    position_legs.push((legs.len(), qty));
                     legs.push(leg);
                     max_expire = max_expire.max(leg.expire);
                 }
             }
+            positions_idx.push(position_legs);
         }
 
         legs.sort_by_key(|leg| (leg.expire_id, leg.option_type));
@@ -87,6 +94,7 @@ impl LegUniverse {
             max_expire,
             call_present,
             put_present,
+            positions_idx,
             type_range,
             expiry_range,
         }

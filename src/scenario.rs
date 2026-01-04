@@ -3,7 +3,7 @@ use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 use rand_xoshiro::Xoshiro256PlusPlus;
 
-use crate::{Context, LegUniverse, OptionType, vol_dynamics::mu_table, vol_factor_table};
+use crate::{Context, LegUniverse, OptionType, mu_table, vol_factor_table};
 
 const SECONDS_PER_YEAR: f64 = 365.0 * 24.0 * 3600.0;
 const MINUTES_PER_DAY: f64 = 24.0 * 60.0;

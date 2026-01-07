@@ -25,6 +25,11 @@ impl Simulator {
         if row_stride == 0 {
             return Vec::new();
         }
+
+        //
+        // Evaluate legs
+        //
+
         // [leg][path][step]
         let mut values: Vec<f64> = vec![0.0; leg_count * paths * steps];
 
@@ -85,7 +90,23 @@ impl Simulator {
                 });
         }
 
-        values
+        //
+        // Combine legs into postion values
+        //
+        let positions_idx = &universe.positions_idx;
+        let pos_count = positions_idx.len();
+        // [leg][path][step]
+        let mut pos_values: Vec<f64> = vec!(0.0; pos_count * paths * steps);
+        for legs in positions_idx.iter() {
+            for &(idx, qty) in legs.iter() {
+                let start = idx * leg_stride;
+                let end = (idx+1) * leg_stride;
+                for (v, p) in values[start..end].iter().zip(pos_values[start..end].iter_mut()) {
+                    *p += v * qty as f64;
+                }
+            }
+        }
+        pos_values
     }
     
 }

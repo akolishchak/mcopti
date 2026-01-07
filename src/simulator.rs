@@ -95,14 +95,14 @@ impl Simulator {
         //
         let positions_idx = &universe.positions_idx;
         let pos_count = positions_idx.len();
-        // [leg][path][step]
-        let mut pos_values: Vec<f64> = vec!(0.0; pos_count * paths * steps);
-        for legs in positions_idx.iter() {
-            for &(idx, qty) in legs.iter() {
-                let start = idx * leg_stride;
-                let end = (idx+1) * leg_stride;
-                for (v, p) in values[start..end].iter().zip(pos_values[start..end].iter_mut()) {
-                    *p += v * qty as f64;
+        // [position][path][step]
+        let mut pos_values: Vec<f64> = vec!(0.0; pos_count * leg_stride);
+        for (pos_idx, legs) in positions_idx.iter().enumerate() {
+            let dst = &mut pos_values[pos_idx * leg_stride..(pos_idx + 1) * leg_stride];
+            for &(leg_idx, qty) in legs.iter() {
+                let src = &values[leg_idx * leg_stride..(leg_idx + 1) * leg_stride];
+                for (d, s) in dst.iter_mut().zip(src.iter()) {
+                    *d += s * qty as f64;
                 }
             }
         }

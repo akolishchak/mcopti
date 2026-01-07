@@ -30,36 +30,47 @@ impl LegUniverse {
             .map(|p| p.legs.len())
             .sum();
         let mut legs: Vec<Leg> = Vec::with_capacity(capacity);
-        let mut positions_idx = Vec::with_capacity(capacity);
+        let mut positions_idx = Vec::with_capacity(positions.len());
         let mut max_expire = NaiveDate::MIN;
         let mut call_present = false;
         let mut put_present = false;
 
         for position in positions {
+            for &(leg, _) in position.legs.iter() {
+                match &leg.option_type {
+                    OptionType::Call => call_present = true,
+                    OptionType::Put => put_present = true,
+                }
+                max_expire = max_expire.max(leg.expire);
+                legs.push(leg);
+            }
+        }
+
+        legs.sort_unstable_by(|a, b| {
+            (a.expire_id, a.option_type)
+                .cmp(&(b.expire_id, b.option_type))
+                .then_with(|| a.strike.total_cmp(&b.strike))
+        });
+        legs.dedup_by(|a, b| {
+            a.expire_id == b.expire_id
+                && a.option_type == b.option_type
+                && a.strike == b.strike
+        });
+
+        for position in positions {
             let mut position_legs = Vec::with_capacity(position.legs.len());
             for &(leg, qty) in position.legs.iter() {
-                let unique_leg = legs.iter().enumerate().find(|&(idx, unique_leg)| {
-                    unique_leg.expire_id == leg.expire_id
-                    && unique_leg.option_type == leg.option_type
-                    && unique_leg.strike == leg.strike
-                });
-
-                if let Some((idx, _)) = unique_leg {
-                    position_legs.push((idx, qty));
-                } else {
-                    match &leg.option_type {
-                        OptionType::Call => call_present = true,
-                        OptionType::Put => put_present = true,
-                    }
-                    position_legs.push((legs.len(), qty));
-                    legs.push(leg);
-                    max_expire = max_expire.max(leg.expire);
-                }
+                let idx = legs
+                    .binary_search_by(|l| {
+                        (l.expire_id, l.option_type)
+                            .cmp(&(leg.expire_id, leg.option_type))
+                            .then_with(|| l.strike.total_cmp(&leg.strike))
+                    })
+                    .expect("leg not found after universe build");
+                position_legs.push((idx, qty));
             }
             positions_idx.push(position_legs);
         }
-
-        legs.sort_by_key(|leg| (leg.expire_id, leg.option_type));
 
         let mut type_range = Vec::new();
         let mut last_type_range = None;

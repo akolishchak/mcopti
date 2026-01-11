@@ -272,7 +272,7 @@ mod tests {
         let mut position = Position::new();
         position.push(short, -1);
         position.push(long, 1);
-        let leg_universe = LegUniverse::from_positions(&[position]);
+        let leg_universe = LegUniverse::from_positions(vec![position]);
 
         let scenario = Scenario::new(&context, &leg_universe);
         let steps = scenario.dt_years.len();

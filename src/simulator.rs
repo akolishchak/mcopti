@@ -1,11 +1,41 @@
-use crate::{Context, LegUniverse, Scenario, interp_linear_kgrid, bs_price};
+use crate::{Context, LegUniverse, Scenario, interp_linear_kgrid, bs_price, linspace_vec};
 use rayon::prelude::*;
 
-pub struct Simulator {}
+pub struct Simulator {
+    exit_grid: Vec<f64>,
+    commission_per_trade: f64,
+    close_slippage_frac: f64,
+}
 
 impl Simulator {
+
+    pub fn new() -> Self {
+
+        let exit_grid = linspace_vec(0.1, 1.0, 10);
+        Self {
+            exit_grid,
+            commission_per_trade: 0.0,
+            close_slippage_frac: 0.0,
+        }
+    }
+
+    pub fn exit_grid(mut self, start: f64, end: f64, points: usize) -> Self {
+        self.exit_grid = linspace_vec(start, end, points);
+        self
+    }
+
+    pub fn commission_per_trade(mut self, value: f64) -> Self {
+        self.commission_per_trade = value;
+        self
+    }
+
+    pub fn close_slippage_frac(mut self, value: f64) -> Self {
+        self.close_slippage_frac = value;
+        self
+    }
+
     // Returns leg-major values laid out as [leg][path][step] (step is the innermost stride).
-    pub fn run(context: &Context, universe: &LegUniverse, scenario: &Scenario) -> Vec<f64> {
+    pub fn run(&self, context: &Context, universe: &LegUniverse, scenario: &Scenario) -> Vec<f64> {
         let vol_surface = &context.vol_surface;
         let s_path = &scenario.s_path;
         let iv_mult_path = &scenario.iv_mult_path;
@@ -107,6 +137,10 @@ impl Simulator {
             }
         }
         pos_values
+    }
+
+    fn compute_pt_sl_stats(&self, universe: &LegUniverse, pos_values: &[f64]) {
+
     }
     
 }

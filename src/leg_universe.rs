@@ -8,6 +8,7 @@ pub struct LegUniverse {
     pub call_present: bool,
     pub put_present: bool,
     pub positions_idx: Vec<Vec<(usize, i64)>>,
+    pub positions: Vec<Position>,
     type_range: Vec<(usize, usize)>,
     expiry_range: Vec<(usize, usize)>,
 }
@@ -24,7 +25,7 @@ pub struct LegUniverseExpirySlice<'a> {
 }
 
 impl LegUniverse {
-    pub fn from_positions(positions: &[Position]) -> Self {
+    pub fn from_positions(positions: Vec<Position>) -> Self {
         let capacity = positions
             .iter()
             .map(|p| p.legs.len())
@@ -35,7 +36,7 @@ impl LegUniverse {
         let mut call_present = false;
         let mut put_present = false;
 
-        for position in positions {
+        for position in positions.iter() {
             for &(leg, _) in position.legs.iter() {
                 match &leg.option_type {
                     OptionType::Call => call_present = true,
@@ -57,7 +58,7 @@ impl LegUniverse {
                 && a.strike == b.strike
         });
 
-        for position in positions {
+        for position in positions.iter() {
             let mut position_legs = Vec::with_capacity(position.legs.len());
             for &(leg, qty) in position.legs.iter() {
                 let idx = legs
@@ -106,6 +107,7 @@ impl LegUniverse {
             call_present,
             put_present,
             positions_idx,
+            positions,
             type_range,
             expiry_range,
         }

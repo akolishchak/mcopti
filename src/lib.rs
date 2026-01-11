@@ -18,7 +18,7 @@ pub mod config;
 pub use {
     raw_option_chain::{RawOptionChain, OptionType},
     option_chain::{OptionChain, OptionChainSide},
-    volsurface::{VolSurface, interp_linear_kgrid},
+    volsurface::{VolSurface, interp_linear_kgrid, linspace_vec},
     pchip::Pchip,
     market_calendar::MarketCalendar,
     market_data::{MarketData, Column},

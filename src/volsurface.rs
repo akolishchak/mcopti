@@ -43,6 +43,10 @@ impl VolSurface {
         }
     }
 
+    pub fn row_len(&self) -> usize {
+        K_GRID.len()
+    }
+
     pub fn row<'a>(&'a self, side: OptionType, tau: f64) -> Cow<'a, [f64]> {
         let lut = match side {
             OptionType::Call => &self.calls,
@@ -196,7 +200,7 @@ impl TauLut {
             .copied()
             .collect();
 
-        // Enforce monotonicity in τ for each k by cumulative max down each column.
+        // Enforce monotonicity in tau for each k by cumulative max down each column.
         // [K_N * n_tau]
         self.w_mon = w_raw_t
             .chunks_exact(n_tau)

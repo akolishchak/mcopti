@@ -1,3 +1,5 @@
+//! Deserialize option chain JSON into typed structures and parse files.
+
 use chrono::NaiveDate;
 use serde::de::{Error as DeError, Visitor};
 use serde::{Deserialize, Deserializer};

@@ -1,3 +1,5 @@
+//! Bundle option chain data, vol surface, calendar, and config for simulation.
+
 use chrono::Datelike;
 use crate::{Config, DEFAULT_CONFIG, OptionChain, RawOptionChain, MarketCalendar, VolSurface};
 

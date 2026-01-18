@@ -1,3 +1,5 @@
+//! Build time grids, vol multipliers, and Monte Carlo spot paths.
+
 use chrono::Duration;
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
@@ -7,10 +9,12 @@ use crate::{Context, LegUniverse, OptionType, mu_table, vol_factor_table};
 
 const SECONDS_PER_YEAR: f64 = 365.0 * 24.0 * 3600.0;
 const MINUTES_PER_DAY: f64 = 24.0 * 60.0;
+// Fraction of daily variance assigned to overnight gaps vs intraday.
 const OVERNIGHT_VAR_FRACTION: f64 = 0.30;
 
 pub struct Scenario {
     pub dt_years: Vec<f64>, // aka dt_arr: per-step durations in years
+    // Time-to-max-expiry at each step end (used to align expiries in the simulator).
     pub tau_driver: Vec<f64>,
     pub iv_mult_path: Vec<f64>,
     pub s_path: Vec<f64>,
@@ -24,6 +28,7 @@ impl Scenario {
         let (_, expiry_close) = calendar.session(expiry_date);
         let step_minutes = context.config.step_minutes;
         let days_to_expiry = (expiry_date - start_date).num_days();
+        // Approximate step count: intraday bars plus one overnight gap per calendar day.
         let capacity = (
             days_to_expiry * context.calendar.max_session_mins()
             / step_minutes + days_to_expiry
@@ -39,11 +44,13 @@ impl Scenario {
         let mut median_buf = Vec::with_capacity(64);
 
         // TODO: consider storing shocks once and deriving S paths deterministically for both sides
+        // If puts exist, use put IV for factor calibration; otherwise use calls.
         let side = if leg_universe.put_present { OptionType::Put } else { OptionType::Call };
         let vol_surface = &context.vol_surface;
         let ncal_max = days_to_expiry.min(365).max(1);
         let factor_clamp = context.config.factor_clamp;
         // dynamic factor curve f_day
+        // f_by_day[d] scales IV to match realized vol over d calendar days.
         let f_by_day = vol_factor_table(
             &context.ticker,
             start_date,
@@ -58,6 +65,7 @@ impl Scenario {
         let mu_trend = mu_table(&context.ticker, start_date, (-0.3, 0.3));
         let s0 = context.option_chain.spot;
         // TODO: per-strategy strikes (e.g., short strike for spreads) instead of s0-only lookup
+        // Use a floor strike to avoid unrealistically low IV in the wings.
         let s_iv_floor = s0 * context.config.iv_floor;
 
         let mut day = start_date;
@@ -71,20 +79,24 @@ impl Scenario {
 
             while t < close_dt {
                 let next = (t + step).min(close_dt);
+                // Use step end for tau so simulator timestamps align to row lookups.
                 let dt_year = (next - t).as_seconds_f64() / SECONDS_PER_YEAR;
                 let tau = ((expiry_close - next).as_seconds_f64() as f64 / SECONDS_PER_YEAR).max(1e-8);
 
                 dt_years.push(dt_year);
                 tau_driver.push(tau);
 
+                // Base IV from surface, with a floor via a lower strike to stabilize skew tails.
                 let iv = vol_surface
                     .iv(side, tau, s0)
                     .max(vol_surface.iv(side, tau, s_iv_floor));
                 let d = ((tau * 365.0).round().max(1.0)) as i32; // >=1 day
                 let idx = d.clamp(1, (f_by_day.len() - 1) as i32) as usize;
+                // sigma = f(d) * IV; f(d) is the realized/implied ratio for that tenor.
                 let sigma = (f_by_day[idx] * iv).clamp(1e-6, 5.0);
                 let iv_mult = (sigma / iv.max(1e-8)).clamp(iv_level_clamp.0, iv_level_clamp.1);
 
+                // Store the multiplier; simulator applies it as a variance scale.
                 iv_mult_path.push(iv_mult);
                 sigma_eff.push(0.0); // placeholder, filled per-day below
                 intraday_minutes += (next - t).as_seconds_f64() / 60.0;
@@ -114,6 +126,7 @@ impl Scenario {
             let gap = next_open - close_dt;
             // Use full-resolution gap (seconds) to handle partial-day closures accurately.
             let end = if gap.num_seconds() > 0 {
+                // Single overnight step that ends at the next open.
                 let dt_year = gap.as_seconds_f64() / SECONDS_PER_YEAR;
                 let tau = ((expiry_close - next_open).as_seconds_f64() / SECONDS_PER_YEAR).max(1e-8);
 
@@ -152,7 +165,7 @@ impl Scenario {
             day = next_day;
         }
 
-        // s path simulation
+        // s path simulation (lognormal with time-varying sigma and drift).
         let steps = sigma_eff.len();
         let mut rng = match seed {
             Some(s) => Xoshiro256PlusPlus::seed_from_u64(s),
@@ -193,6 +206,7 @@ fn fill_sigma_eff(
         return;
     }
 
+    // Scale intraday sigma so intraday variance sums to (1 - overnight_fraction).
     let intra_scale = ((1.0 - OVERNIGHT_VAR_FRACTION) * (MINUTES_PER_DAY / intraday_minutes)).max(1e-12);
     let sigma_intra = sigma_day * intra_scale.sqrt();
     for slot in sigma_eff[start..intra_end].iter_mut() {
@@ -200,6 +214,7 @@ fn fill_sigma_eff(
     }
     for (offset, slot) in sigma_eff[intra_end..end].iter_mut().enumerate() {
         let dt_days = dt_years[intra_end + offset] * 365.0;
+        // Scale overnight sigma so overnight variance sums to overnight_fraction.
         let ov_scale = (OVERNIGHT_VAR_FRACTION / dt_days.max(1e-12)).max(1e-12);
         *slot = sigma_day * ov_scale.sqrt();
     }
@@ -209,6 +224,7 @@ fn median_inplace(buf: &mut Vec<f64>) -> Option<f64> {
     if buf.is_empty() {
         return None;
     }
+    // select_nth_unstable_by is in-place and may reorder the buffer.
     let mid = buf.len() / 2;
     buf.select_nth_unstable_by(mid, |a, b| a.total_cmp(b));
     if buf.len() % 2 == 1 {

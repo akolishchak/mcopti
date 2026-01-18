@@ -1,3 +1,5 @@
+//! Option leg definition and builder for validated strikes and expiries.
+
 use chrono::NaiveDate;
 
 use crate::{OptionType, Context};

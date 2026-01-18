@@ -1,7 +1,7 @@
+//! Bucket option quotes by expiry and side and expose per-expiry slices.
+
 use crate::{OptionType, RawOptionChain, raw_option_chain::OptionContract};
 use chrono::NaiveDate;
-
-const EPSILON: f64 = 1e-12;
 
 pub struct OptionChain {
     pub spot: f64,

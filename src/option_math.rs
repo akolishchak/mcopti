@@ -1,3 +1,5 @@
+//! Option math helpers including NCDF, Black-Scholes, and path simulation.
+
 use crate::OptionType;
 use rand::{SeedableRng, Rng};
 use rand_distr::StandardNormal;

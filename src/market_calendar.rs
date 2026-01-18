@@ -1,4 +1,6 @@
-use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeDelta, TimeZone, Weekday};
+//! US equities trading calendar with holidays and session times.
+
+use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Weekday};
 use chrono_tz::{America::New_York, Tz};
 
 pub type MarketCalendar = USMarketCalendar;

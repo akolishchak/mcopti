@@ -1,3 +1,4 @@
+//! Monotone PCHIP interpolation for shape-preserving curves.
 
 use std::{error::Error, fmt, borrow::Cow};
 

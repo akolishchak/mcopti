@@ -1,4 +1,4 @@
-
+//! Simulation configuration defaults and tuning parameters.
 
 pub struct Config {
     pub paths: usize,

@@ -1,13 +1,18 @@
+//! Build and query a log-moneyness implied volatility surface.
+
 use crate::{OptionChain, OptionChainSide, OptionType, Pchip};
 use std::borrow::Cow;
 
 const EPSILON: f64 = 1e-12;
 
+// Work in total variance w = sigma^2 * tau; it is smoother and monotone in tau.
 // Grid in log-moneyness k = ln(K/spot)
 const K_MIN: f64 = -2.5;
 const K_MAX: f64 = 2.5;
 const K_N: usize = 101;
+// Precompute tau->row lookup for fast query-time interpolation.
 const TAU_LUT_SIZE: usize = 1024;
+// Enforce monotone total variance in tau to avoid negative forward variance.
 const TAU_MONO_MODE: TauMonoMode = TauMonoMode::Taper;
 const TAU_NODE_ATOL: f64 = 1e-10;
 const TAU_TAPER_WINDOW: f64 = 24.0 / (24.0 * 365.0);  // ~24 hours in year fraction
@@ -16,9 +21,12 @@ const K_GRID: [f64; K_N] = linspace_array::<K_N>(K_MIN, K_MAX);
 const K_GRID_STEP: f64 = linspace_step(K_N, K_MIN, K_MAX);
 
 enum TauMonoMode {
+    #[allow(dead_code)]
     None,
     Taper,
+     #[allow(dead_code)]
     Soft,
+     #[allow(dead_code)]
     Hard,
 }
 
@@ -53,6 +61,7 @@ impl VolSurface {
             OptionType::Put => &self.puts,
         };
 
+        // Nearest node anchors tapering so quoted expiries stay exact.
         //
         // exact match => return row directly
         //
@@ -71,6 +80,7 @@ impl VolSurface {
             }
         };
 
+        // Near a node, return the raw surface without smoothing.
         let closest_dist = (lut.tau[closest_idx] - tau).abs();
         if matches!(TAU_MONO_MODE, TauMonoMode::None) || closest_dist < TAU_NODE_ATOL {
             return (&lut.w_raw[closest_idx * K_N..(closest_idx + 1) * K_N]).into();
@@ -78,6 +88,7 @@ impl VolSurface {
 
         //
         // Extrapolation
+        // Clamp to first/last expiry to avoid unstable forward variance.
         //
         if tau < lut.tmin {
             return (&lut.w_raw[0..K_N]).into();
@@ -88,6 +99,7 @@ impl VolSurface {
 
         //
         // Within range: linear interp on LUT between nearest grid points
+        // This avoids per-query PCHIP and uses the precomputed tau grid.
         //
         let tau_grid_pos = (tau - lut.tmin) * (TAU_LUT_SIZE as f64 - 1.0) / (lut.tmax - lut.tmin).max(EPSILON);
         // position in tau LUT grid
@@ -109,6 +121,7 @@ impl VolSurface {
 
         //
         // 'taper': blend uplift away from the nearest node
+        // Raw rows preserve fit; monotone rows remove decreasing variance.
         //
         // 0 at node → 1 beyond taper window
         let phi = (closest_dist / TAU_TAPER_WINDOW).min(1.0);
@@ -116,6 +129,7 @@ impl VolSurface {
         let mon1 = &lut.w_mon_lut[i1 * K_N..(i1 + 1) * K_N];
 
         // evaluate Wm at tau by LUT
+        // Blend raw/monotone by phi and floor to EPSILON.
         let w_tapered: Vec<_> = raw0.iter()
             .zip(raw1.iter())
             .zip(mon0.iter().zip(mon1.iter()))
@@ -133,6 +147,7 @@ impl VolSurface {
         let k = (strike / self.spot).ln();
         let w_row = self.row(side, tau);
 
+        // Interpolate total variance in log-moneyness, then convert to IV.
         let w = interp_linear(k, &K_GRID, &w_row);
         (w / tau.max(EPSILON)).sqrt().max(EPSILON)
     }
@@ -145,6 +160,7 @@ impl VolSurface {
         let dw_val = interp_linear(k_eval, &K_GRID, &dw_dk);
         let sigma = (w_val.max(EPSILON) / tau).sqrt();
 
+        // dσ/dk from w = σ^2 * tau => dw/dk = 2σ tau dσ/dk.
         dw_val / (2.0 * sigma * tau)
     }
 
@@ -183,6 +199,7 @@ impl TauLut {
         self.w_raw.clear();
         // [n_tau * K_N]
         self.w_raw.reserve(n_tau * k_n);
+        // Each expiry bucket: fit PCHIP in k and sample onto a fixed k-grid.
         for bucket in side.slices() {
             let w: Vec<_> = bucket.iv.iter()
                 .map(|&iv_i| iv_i * iv_i * bucket.tau)
@@ -200,6 +217,7 @@ impl TauLut {
             .copied()
             .collect();
 
+        // Cumulative max enforces non-decreasing w in tau per strike.
         // Enforce monotonicity in tau for each k by cumulative max down each column.
         // [K_N * n_tau]
         self.w_mon = w_raw_t
@@ -215,8 +233,10 @@ impl TauLut {
 
         self.tmin = self.tau.first().map_or(0.0, |&t| t);
         self.tmax = self.tau.last().map_or(0.0, |&t| t);
+        // Fixed tau grid for fast row interpolation at query time.
         let tau_grid = linspace_vec(self.tmin, self.tmax, TAU_LUT_SIZE);
 
+        // Build tau LUTs for both raw and monotone surfaces.
         // [TAU_LUT_SIZE * K_N] row-major for fast row access
         self.w_raw_lut = self.to_lut(&w_raw_t, (k_n, n_tau), tau_grid.as_slice());
         self.w_mon_lut = self.to_lut(self.w_mon.as_slice(), (k_n, n_tau), tau_grid.as_slice());
@@ -234,6 +254,7 @@ impl TauLut {
         let mut lut = vec![0.0; grid_len * n_cols];
 
         for (col_idx, col) in w.chunks_exact(col_len).enumerate() {
+            // Interpolate along tau at fixed k to populate LUT rows.
             let pchip = Pchip::new(self.tau.as_slice(), col)
                 .expect("Failed to create PCHIP interpolant for LUT");
             for (row_idx, &t) in tau_grid.iter().enumerate() {

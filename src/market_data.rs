@@ -1,3 +1,4 @@
+//! SQLite market data access for historical candles and indicators.
 
 use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{Connection, Error, OpenFlags, Result, params};

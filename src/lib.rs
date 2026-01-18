@@ -1,3 +1,5 @@
+//! Crate entry points and public re-exports for option simulation.
+
 pub mod pchip;
 pub mod raw_option_chain;
 pub mod option_chain;

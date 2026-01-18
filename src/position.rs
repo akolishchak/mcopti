@@ -1,3 +1,5 @@
+//! Multi-leg position container and premium tracking.
+
 use crate::Leg;
 
 pub struct Position {

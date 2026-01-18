@@ -1,3 +1,5 @@
+//! Deduplicated leg universe with slices for simulation workloads.
+
 use chrono::NaiveDate;
 
 use crate::{Leg, OptionType, Position};

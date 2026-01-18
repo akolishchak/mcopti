@@ -1,3 +1,5 @@
+//! Realized volatility estimates derived from market data.
+
 use chrono::{Duration, NaiveDate};
 
 use crate::market_data::DbMode;

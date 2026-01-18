@@ -1,3 +1,4 @@
+//! Volatility scaling and drift helpers driven by historical data.
 
 use chrono::{NaiveDate, Duration};
 

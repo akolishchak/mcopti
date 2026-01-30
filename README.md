@@ -90,5 +90,3 @@ cargo test
 Tests use fixtures in `tests/fixtures` and will copy the market data DB into `data/`
 when needed.
 
-## License
-MIT. See `LICENSE`.

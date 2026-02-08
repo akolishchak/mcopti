@@ -204,20 +204,13 @@ impl Simulator {
 
             let mut metrcis = Vec::with_capacity(pos_count);
             for (i, pos) in positions.iter().enumerate() {
-                let expected_value = 
-                    pos.premium +
-                    path_pos_values
-                    .iter()
-                    .skip(i)
-                    .step_by(pos_count)
-                    .map(|(mark, _)| mark)
-                    .sum::<f64>() / paths as f64;
-
-                let drawdown = path_pos_values
-                    .iter()
-                    .skip(i)
-                    .step_by(pos_count)
-                    .fold(f64::INFINITY, |a, (_, drawdown)| a.min(*drawdown));
+                let mut sum_mark = 0.0;
+                let mut drawdown = f64::INFINITY;
+                for (mark, min_mark) in path_pos_values.iter().skip(i).step_by(pos_count) {
+                    sum_mark += *mark;
+                    drawdown = drawdown.min(*min_mark);
+                }
+                let expected_value = pos.premium + sum_mark / paths as f64;
                 
                 let risk = (pos.premium - drawdown).max(0.0);
                 metrcis.push(Metrics {

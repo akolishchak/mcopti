@@ -133,4 +133,8 @@ impl LegUniverse {
                 legs: &self.legs[start..end]
             })
     }
+
+    pub fn expiries(&self) -> usize {
+        self.expiry_range.len()
+    }
 }

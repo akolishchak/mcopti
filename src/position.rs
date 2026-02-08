@@ -1,4 +1,4 @@
-//! Multi-leg position container and premium tracking.
+//! Multi-leg position container
 
 use crate::Leg;
 
@@ -18,7 +18,7 @@ impl Position {
     pub fn push(&mut self, leg: Leg, qty: i64) {
         assert_ne!(qty, 0);
         self.legs.push((leg, qty));
-        self.premium += leg.mid;
+        self.premium += leg.mid * qty as f64;
     }
 
     pub fn add(mut self, leg: Leg, qty: i64) -> Self {

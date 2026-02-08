@@ -58,6 +58,7 @@ impl Simulator {
         let positions_idx = &universe.positions_idx;
         let positions = &universe.positions;
         let pos_count = positions_idx.len();
+        let ln_strike: Vec<f64> = universe.legs.iter().map(|leg| leg.strike.ln()).collect();
         let (_, max_expiry_close) = calendar.session(max_expire);
         if steps == 0 || leg_count == 0 {
             return None;
@@ -139,6 +140,7 @@ impl Simulator {
                     // process a path
                     //
                     for (step, &s) in path_local.iter().enumerate() {
+                        let ln_s = s.ln();
                         //
                         // mark legs
                         //
@@ -156,7 +158,7 @@ impl Simulator {
                                     let offset = slice_leg_idx * row_stride;
                                     let w_row = &rows[offset..offset + row_stride];
                                     // log-moneyness drives the vol-surface lookup.
-                                    let k = (leg.strike / s).ln();
+                                    let k = ln_strike[leg_idx] - ln_s;
                                     // w is total variance at (k, tau); convert to IV before pricing.
                                     let w = interp_linear_kgrid(k, w_row);
                                     let iv = (w / tau).sqrt();

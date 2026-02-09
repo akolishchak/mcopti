@@ -24,6 +24,39 @@ struct ExpiryData {
     step_stride: usize,
 }
 
+struct PathAcc {
+    // sum of final marks across processed paths, per position
+    sum_last: Vec<f64>,
+    // worst (lowest) running mark seen across all processed paths, per position
+    worst_min: Vec<f64>,
+    // number of full paths aggregated into this accumulator
+    paths_done: usize,
+}
+
+impl PathAcc {
+    fn new(pos_count: usize) -> Self {
+        Self {
+            sum_last: vec![0.0; pos_count],
+            worst_min: vec![f64::INFINITY; pos_count],
+            paths_done: 0,
+        }
+    }
+
+    fn merge(mut self, other: Self) -> Self {
+        self.paths_done += other.paths_done;
+        for ((sum_last, worst_min), (&other_sum_last, &other_worst_min)) in self
+            .sum_last
+            .iter_mut()
+            .zip(self.worst_min.iter_mut())
+            .zip(other.sum_last.iter().zip(other.worst_min.iter()))
+        {
+            *sum_last += other_sum_last;
+            *worst_min = (*worst_min).min(other_worst_min);
+        }
+        self
+    }
+}
+
 impl Simulator {
 
     pub fn new() -> Self {
@@ -51,7 +84,7 @@ impl Simulator {
         self
     }
 
-    // Returns per-position metrics (expected value and drawdown-based risk) across paths.
+    // returns per-position metrics (expected value and drawdown-based risk) across paths.
     pub fn run(&self, context: &Context, universe: &LegUniverse, scenario: &Scenario) -> Option<Vec<Metrics>> {
         let calendar = &context.calendar;
         let vol_surface = &context.vol_surface;
@@ -79,7 +112,7 @@ impl Simulator {
             return None;
         }
 
-        // Walk expiries in order so we can align each slice to the common tau grid and reuse precomputed rows.
+        // walk expiries in order so we can align each slice to the common tau grid and reuse precomputed rows.
         let mut expiry_data: Vec<ExpiryData> = Vec::with_capacity(universe.expiries());
         for expire_slice in universe.expiry_slices() {
             let (_, leg_close) = calendar.session(expire_slice.legs.first().unwrap().expire);
@@ -126,113 +159,124 @@ impl Simulator {
             });
         }
 
-        // [path][pos] = (mark, drawdown)
-        let mut path_pos_values: Vec<(f64, f64)> = vec![(0.0, f64::INFINITY); pos_count * paths];
-
-        // Parallelize across path chunks per leg to keep work balanced without nested pools.
+        // parallelize across path chunks and reduce into per-position aggregates
         let threads = rayon::current_num_threads().max(1);
-        // Chunk by paths to keep per-thread work sizable.
+        // chunk by paths to keep per-thread work sizable
         let chunk_paths = (paths / (threads * 4).max(1)).max(1);
+        let chunk_len = chunk_paths * steps;
 
-        path_pos_values
-            .par_chunks_mut(chunk_paths * pos_count)
-            .enumerate()
-            .for_each(|(chunk_idx, path_values_chunk)| {
-                // work on a handful of paths at a time to balance parallel work.
-                let path0 = chunk_idx * chunk_paths;
-                let path1 = (path0 + chunk_paths).min(paths);
-                let path_chunk = &s_path[path0 * steps .. path1 * steps];
+        let acc = s_path
+            .par_chunks(chunk_len)
+            .fold(
+                // each worker builds a local accumulator for its assigned path chunks
+                || PathAcc::new(pos_count),
+                |mut acc, path_chunk| {
+                    let mut leg_marks: Vec<f64> = vec![0.0; leg_count];
+                    let mut min_mark: Vec<f64> = vec![0.0; pos_count];
+                    let mut last_mark: Vec<f64> = vec![0.0; pos_count];
 
-                let mut leg_marks: Vec<f64> = vec![0.0; leg_count];
-                for (path_local, pos_values) in path_chunk
-                    .chunks(steps)
-                    .zip(path_values_chunk.chunks_mut(pos_count))
-                {
-                    //
-                    // process a path
-                    //
-                    for (step, &s) in path_local.iter().enumerate() {
-                        let ln_s = s.ln();
-                        //
-                        // mark legs
-                        //
-                        // track the absolute leg offset; expiry_slices() yields legs in the same stable order as universe.legs.
-                        let mut leg_idx = 0;
-                        for (expire_slice, expiry_data) in universe
-                            .expiry_slices()
-                            .zip(expiry_data.iter())
-                        {
-                            let steps_to_expiry = expiry_data.taus.len();
-                            if step < steps_to_expiry {
-                                let tau = expiry_data.taus[step];
-                                let step_base = step * expiry_data.step_stride;
-                                let rows = &expiry_data.rows[step_base..step_base + expiry_data.step_stride];
-                                for (slice_leg_idx, leg) in expire_slice.legs.iter().enumerate() {
-                                    
-                                    let offset = slice_leg_idx * row_stride;
-                                    let w_row = &rows[offset..offset + row_stride];
-                                    // log-moneyness drives the vol-surface lookup.
-                                    let k = ln_strike[leg_idx] - ln_s;
-                                    // w is total variance at (k, tau); convert to IV before pricing.
-                                    let w = interp_linear_kgrid(k, w_row);
-                                    let iv = (w / tau).sqrt();
-                                    // mark-to-market the leg using slice-specific rows and path price.
-                                    leg_marks[leg_idx] = bs_price(leg.option_type, s, leg.strike, tau, iv);
+                    for path_local in path_chunk.chunks_exact(steps) {
+                        let mut first_step = true;
+                        for (step, &s) in path_local.iter().enumerate() {
+                            let ln_s = s.ln();
+                            //
+                            // mark legs
+                            //
+                            // track the absolute leg offset; expiry_slices() yields legs in the same stable order as universe.legs.
+                            let mut leg_idx = 0;
+                            for (expire_slice, expiry_data) in universe
+                                .expiry_slices()
+                                .zip(expiry_data.iter())
+                            {
+                                let steps_to_expiry = expiry_data.taus.len();
+                                if step < steps_to_expiry {
+                                    let tau = expiry_data.taus[step];
+                                    let step_base = step * expiry_data.step_stride;
+                                    let rows = &expiry_data.rows[step_base..step_base + expiry_data.step_stride];
+                                    for (slice_leg_idx, leg) in expire_slice.legs.iter().enumerate() {
+                                        let offset = slice_leg_idx * row_stride;
+                                        let w_row = &rows[offset..offset + row_stride];
+                                        // log-moneyness drives the vol-surface lookup.
+                                        let k = ln_strike[leg_idx] - ln_s;
+                                        // w is total variance at (k, tau); convert to IV before pricing.
+                                        let w = interp_linear_kgrid(k, w_row);
+                                        let iv = (w / tau).sqrt();
+                                        // mark-to-market the leg using slice-specific rows and path price.
+                                        leg_marks[leg_idx] = bs_price(leg.option_type, s, leg.strike, tau, iv);
 
-                                    // safe to advance: each slice covers a disjoint, ordered range of legs.
-                                    leg_idx += 1;
-                                }
-                            } else {
-                                // After expiry, keep the terminal payoff flat through the remaining steps.
-                                // This models European intrinsic value after expiration.
-                                let s = path_local[steps_to_expiry.saturating_sub(1)];
-                                for (_, leg) in expire_slice.legs.iter().enumerate() {
-                                    let value_at_expire = match leg.option_type {
-                                        OptionType::Call => (s - leg.strike).max(0.0),
-                                        OptionType::Put => (leg.strike - s).max(0.0),
-                                    };
-                                    leg_marks[leg_idx] = value_at_expire;
-                                    leg_idx += 1;
+                                        // safe to advance: each slice covers a disjoint, ordered range of legs.
+                                        leg_idx += 1;
+                                    }
+                                } else {
+                                    // After expiry, keep the terminal payoff flat through the remaining steps.
+                                    // This models European intrinsic value after expiration.
+                                    let s = path_local[steps_to_expiry.saturating_sub(1)];
+                                    for leg in expire_slice.legs.iter() {
+                                        let value_at_expire = match leg.option_type {
+                                            OptionType::Call => (s - leg.strike).max(0.0),
+                                            OptionType::Put => (leg.strike - s).max(0.0),
+                                        };
+                                        leg_marks[leg_idx] = value_at_expire;
+                                        leg_idx += 1;
+                                    }
                                 }
                             }
+
+                            //
+                            // mark positions
+                            //
+                            for ((pos_idx, last_mark), min_mark) in positions_idx
+                                .iter()
+                                .zip(last_mark.iter_mut())
+                                .zip(min_mark.iter_mut())
+                            {
+                                let mut mark = 0.0;
+                                for &(leg_idx, qty) in pos_idx.iter() {
+                                    mark += (qty as f64) * leg_marks[leg_idx];
+                                }
+                                *last_mark = mark;
+                                if first_step {
+                                    *min_mark = mark;
+                                } else if mark < *min_mark {
+                                    *min_mark = mark;
+                                }
+                            }
+                            first_step = false;
                         }
 
-                        //
-                        // mark positions
-                        //
-                        for ((mark, drawdown), pos_idx) in pos_values
+                        acc.paths_done += 1;
+                        // merge one completed path into this worker-local accumulator
+                        for ((sum_last, worst_min), (&path_last, &path_min)) in acc
+                            .sum_last
                             .iter_mut()
-                            .zip(positions_idx.iter())
+                            .zip(acc.worst_min.iter_mut())
+                            .zip(last_mark.iter().zip(min_mark.iter()))
                         {
-                            *mark = pos_idx
-                                        .iter()
-                                        .map(|&(leg_idx, qty)| {
-                                            (qty as f64) * leg_marks[leg_idx]
-                                        })
-                                        .sum::<f64>();
-                            *drawdown = drawdown.min(*mark);
+                            *sum_last += path_last;
+                            *worst_min = (*worst_min).min(path_min);
                         }
                     }
-                }
-            });
 
-            let mut metrcis = Vec::with_capacity(pos_count);
-            for (i, pos) in positions.iter().enumerate() {
-                let mut sum_mark = 0.0;
-                let mut drawdown = f64::INFINITY;
-                for (mark, min_mark) in path_pos_values.iter().skip(i).step_by(pos_count) {
-                    sum_mark += *mark;
-                    drawdown = drawdown.min(*min_mark);
-                }
-                let expected_value = sum_mark / paths as f64 - pos.premium;
-                
-                let risk = (pos.premium - drawdown).max(0.0);
-                metrcis.push(Metrics {
-                    expected_value,
-                    risk,
-                });
-            }
-            Some(metrcis)
+                    acc
+                },
+            )
+            // merge all worker accumulators into a final aggregate
+            .reduce(|| PathAcc::new(pos_count), |a, b| a.merge(b));
+
+        let mut metrics = Vec::with_capacity(pos_count);
+        let inv_paths = 1.0 / (acc.paths_done as f64);
+        for (pos, (&sum_last, &worst_min)) in positions
+            .iter()
+            .zip(acc.sum_last.iter().zip(acc.worst_min.iter()))
+        {
+            let expected_value = sum_last * inv_paths - pos.premium;
+            let risk = (pos.premium - worst_min).max(0.0);
+            metrics.push(Metrics {
+                expected_value,
+                risk,
+            });
+        }
+        Some(metrics)
     }
 
 }

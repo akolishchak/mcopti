@@ -18,6 +18,12 @@ pub struct Metrics {
     pub risk: f64,
 }
 
+struct ExpiryData {
+    taus: Vec<f64>,
+    rows: Vec<f64>,
+    step_stride: usize,
+}
+
 impl Simulator {
 
     pub fn new() -> Self {
@@ -74,14 +80,17 @@ impl Simulator {
         }
 
         // Walk expiries in order so we can align each slice to the common tau grid and reuse precomputed rows.
-        let mut expiry_data = Vec::with_capacity(universe.expiries());
+        let mut expiry_data: Vec<ExpiryData> = Vec::with_capacity(universe.expiries());
         for expire_slice in universe.expiry_slices() {
             let (_, leg_close) = calendar.session(expire_slice.legs.first().unwrap().expire);
             // Align this expiry's timeline with the global driver so tau hits zero when the slice expires.
             let tau_offset = ((max_expiry_close - leg_close).as_seconds_f64() / SECONDS_PER_YEAR).max(0.0);
+            let legs_in_expiry = expire_slice.legs.len();
+            let step_stride = legs_in_expiry * row_stride;
 
             // Vec over steps -> (tau, leg-major flat rows for that step)
-            let mut step_data = Vec::with_capacity(steps);
+            let mut taus = Vec::with_capacity(steps);
+            let mut rows = Vec::with_capacity(steps * step_stride);
             for (tau, iv_mult) in tau_driver.iter().zip(iv_mult_path.iter()) {
                 let tau_to_expire = tau - tau_offset;
                 // Once tau is exhausted, remaining steps are post-expiry.
@@ -92,7 +101,6 @@ impl Simulator {
                 // Precompute a contiguous chunk of vol rows scaled by the path's variance multiplier.
                 // Rows store total variance, so the scale applies as iv_mult^2.
                 let scale = iv_mult * iv_mult;
-                let mut rows: Vec<f64> = Vec::with_capacity(expire_slice.legs.len() * row_stride);
                 // Cache per-step rows to avoid re-reading the surface when multiple legs share type.
                 let mut row_call: Option<Cow<'_, [f64]>> = None;
                 let mut row_put:  Option<Cow<'_, [f64]>> = None;
@@ -109,9 +117,13 @@ impl Simulator {
                         .map(|&w| w * scale),
                     );
                 }
-                step_data.push((tau_to_expire, rows));
+                taus.push(tau_to_expire);
             }
-            expiry_data.push(step_data);
+            expiry_data.push(ExpiryData {
+                taus,
+                rows,
+                step_stride,
+            });
         }
 
         // [path][pos] = (mark, drawdown)
@@ -146,13 +158,15 @@ impl Simulator {
                         //
                         // track the absolute leg offset; expiry_slices() yields legs in the same stable order as universe.legs.
                         let mut leg_idx = 0;
-                        for (expire_slice, step_data) in universe
+                        for (expire_slice, expiry_data) in universe
                             .expiry_slices()
                             .zip(expiry_data.iter())
                         {
-                            let steps_to_expiry = step_data.len();
+                            let steps_to_expiry = expiry_data.taus.len();
                             if step < steps_to_expiry {
-                                let (tau, rows) = &step_data[step];
+                                let tau = expiry_data.taus[step];
+                                let step_base = step * expiry_data.step_stride;
+                                let rows = &expiry_data.rows[step_base..step_base + expiry_data.step_stride];
                                 for (slice_leg_idx, leg) in expire_slice.legs.iter().enumerate() {
                                     
                                     let offset = slice_leg_idx * row_stride;
@@ -163,7 +177,7 @@ impl Simulator {
                                     let w = interp_linear_kgrid(k, w_row);
                                     let iv = (w / tau).sqrt();
                                     // mark-to-market the leg using slice-specific rows and path price.
-                                    leg_marks[leg_idx] = bs_price(leg.option_type, s, leg.strike, *tau, iv);
+                                    leg_marks[leg_idx] = bs_price(leg.option_type, s, leg.strike, tau, iv);
 
                                     // safe to advance: each slice covers a disjoint, ordered range of legs.
                                     leg_idx += 1;

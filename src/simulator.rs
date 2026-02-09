@@ -1,6 +1,6 @@
 //! Price legs and positions along simulated scenario paths.
 
-use crate::{Context, LegUniverse, OptionType, Scenario, bs_price, interp_linear_kgrid, linspace_vec, position};
+use crate::{Context, LegUniverse, OptionType, Scenario, bs_price, interp_linear_kgrid, linspace_vec};
 use rayon::prelude::*;
 use std::borrow::Cow;
 

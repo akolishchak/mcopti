@@ -51,7 +51,7 @@ impl Simulator {
         self
     }
 
-    // Returns leg-major values laid out as [leg][path][step] (step is the innermost stride).
+    // Returns per-position metrics (expected value and drawdown-based risk) across paths.
     pub fn run(&self, context: &Context, universe: &LegUniverse, scenario: &Scenario) -> Option<Vec<Metrics>> {
         let calendar = &context.calendar;
         let vol_surface = &context.vol_surface;
@@ -224,7 +224,7 @@ impl Simulator {
                     sum_mark += *mark;
                     drawdown = drawdown.min(*min_mark);
                 }
-                let expected_value = pos.premium + sum_mark / paths as f64;
+                let expected_value = sum_mark / paths as f64 - pos.premium;
                 
                 let risk = (pos.premium - drawdown).max(0.0);
                 metrcis.push(Metrics {

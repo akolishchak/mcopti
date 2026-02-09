@@ -49,9 +49,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let universe = LegUniverse::from_positions(vec![pos]);
     let scenario = Scenario::new(&ctx, &universe);
     let sim = Simulator::new();
-    let values = sim.run(&ctx, &universe, &scenario);
+    let metrics = sim
+        .run(&ctx, &universe, &scenario)
+        .expect("simulation produced no metrics");
 
-    println!("positions x paths x steps: {}", values.len());
+    println!("positions: {}", metrics.len());
+    if let Some(first) = metrics.first() {
+        println!(
+            "first position -> expected_value: {:.4}, risk: {:.4}",
+            first.expected_value, first.risk
+        );
+    }
     Ok(())
 }
 ```
@@ -68,8 +76,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Shapes and outputs
 - `VolSurface::row` returns total variance across a fixed log-moneyness grid; `VolSurface::iv`
   returns implied vol.
-- `Simulator::run` returns position values in a flat `[position][path][step]` layout
-  (position-major, step as the inner stride).
+- `Simulator::run` returns `Option<Vec<Metrics>>`, one `Metrics` per position:
+  `expected_value` and drawdown-based `risk`.
 
 ## Module map
 - `src/raw_option_chain.rs`: parse option chain JSON into typed structs.
@@ -89,4 +97,3 @@ cargo test
 ```
 Tests use fixtures in `tests/fixtures` and will copy the market data DB into `data/`
 when needed.
-

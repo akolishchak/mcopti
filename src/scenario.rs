@@ -4,6 +4,7 @@ use chrono::Duration;
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 use rand_xoshiro::Xoshiro256PlusPlus;
+use rayon::prelude::*;
 
 use crate::{Context, LegUniverse, OptionType, mu_table, vol_factor_table};
 
@@ -34,7 +35,7 @@ impl Scenario {
             / step_minutes + days_to_expiry
         ) as usize;
         let paths = context.config.paths;
-        let seed = Some(context.config.seed);
+        let base_seed = context.config.seed;
 
         let mut dt_years = Vec::with_capacity(capacity);
         let mut tau_driver = Vec::with_capacity(capacity);
@@ -45,7 +46,11 @@ impl Scenario {
 
         // TODO: consider storing shocks once and deriving S paths deterministically for both sides
         // If puts exist, use put IV for factor calibration; otherwise use calls.
-        let side = if leg_universe.put_present { OptionType::Put } else { OptionType::Call };
+        let side = if leg_universe.put_present {
+            OptionType::Put
+        } else {
+            OptionType::Call
+        };
         let vol_surface = &context.vol_surface;
         let ncal_max = days_to_expiry.min(365).max(1);
         let factor_clamp = context.config.factor_clamp;
@@ -81,7 +86,8 @@ impl Scenario {
                 let next = (t + step).min(close_dt);
                 // Use step end for tau so simulator timestamps align to row lookups.
                 let dt_year = (next - t).as_seconds_f64() / SECONDS_PER_YEAR;
-                let tau = ((expiry_close - next).as_seconds_f64() as f64 / SECONDS_PER_YEAR).max(1e-8);
+                let tau =
+                    ((expiry_close - next).as_seconds_f64() as f64 / SECONDS_PER_YEAR).max(1e-8);
 
                 dt_years.push(dt_year);
                 tau_driver.push(tau);
@@ -128,7 +134,8 @@ impl Scenario {
             let end = if gap.num_seconds() > 0 {
                 // Single overnight step that ends at the next open.
                 let dt_year = gap.as_seconds_f64() / SECONDS_PER_YEAR;
-                let tau = ((expiry_close - next_open).as_seconds_f64() / SECONDS_PER_YEAR).max(1e-8);
+                let tau =
+                    ((expiry_close - next_open).as_seconds_f64() / SECONDS_PER_YEAR).max(1e-8);
 
                 dt_years.push(dt_year);
                 tau_driver.push(tau);
@@ -167,23 +174,52 @@ impl Scenario {
 
         // s path simulation (lognormal with time-varying sigma and drift).
         let steps = sigma_eff.len();
-        let mut rng = match seed {
-            Some(s) => Xoshiro256PlusPlus::seed_from_u64(s),
-            None => Xoshiro256PlusPlus::from_os_rng(),
-        };
-        let mut s_path = Vec::with_capacity(paths * steps);
-        for _ in 0..paths {
-            let mut log_price = s0.ln();
-            for (&sigma, &dt) in sigma_eff.iter().zip(dt_years.iter()) {
-                let vol = sigma * dt.sqrt();
-                let drift = (mu_trend - 0.5 * sigma * sigma) * dt;
-                let rand: f64 = rng.sample(StandardNormal);
-                log_price += rand * vol + drift;
-                s_path.push(log_price.exp());
-            }
-        }
 
-        Self { dt_years, tau_driver, iv_mult_path, s_path }
+        let vol_step: Vec<f64> = sigma_eff
+            .iter()
+            .zip(dt_years.iter())
+            .map(|(&sigma, &dt)| sigma * dt.sqrt())
+            .collect();
+        let drift_step: Vec<f64> = sigma_eff
+            .iter()
+            .zip(dt_years.iter())
+            .map(|(&sigma, &dt)| (mu_trend - 0.5 * sigma * sigma) * dt)
+            .collect();
+
+        let mut s_path: Vec<f64> = vec![0.0; paths * steps];
+
+        let log_s0 = s0.ln();
+        // chunk by paths to keep per-worker work sizable and reduce scheduling overhead
+        let threads = rayon::current_num_threads().max(1);
+        let chunk_paths = (paths / (threads * 4).max(1)).max(1);
+        let chunk_len = chunk_paths * steps;
+
+        s_path
+            .par_chunks_mut(chunk_len)
+            .enumerate()
+            .for_each(|(chunk_idx, path_chunk)| {
+                let path_base = chunk_idx * chunk_paths;
+                for (path_offset, path) in path_chunk.chunks_mut(steps).enumerate() {
+                    let path_idx = path_base + path_offset;
+                    let seed = base_seed.wrapping_add(path_idx as u64);
+                    let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
+                    let mut log_price = log_s0;
+                    for (p, (vol, drift)) in
+                        path.iter_mut().zip(vol_step.iter().zip(drift_step.iter()))
+                    {
+                        let rand: f64 = rng.sample(StandardNormal);
+                        log_price += rand * vol + drift;
+                        *p = log_price.exp();
+                    }
+                }
+            });
+
+        Self {
+            dt_years,
+            tau_driver,
+            iv_mult_path,
+            s_path,
+        }
     }
 }
 
@@ -207,7 +243,8 @@ fn fill_sigma_eff(
     }
 
     // Scale intraday sigma so intraday variance sums to (1 - overnight_fraction).
-    let intra_scale = ((1.0 - OVERNIGHT_VAR_FRACTION) * (MINUTES_PER_DAY / intraday_minutes)).max(1e-12);
+    let intra_scale =
+        ((1.0 - OVERNIGHT_VAR_FRACTION) * (MINUTES_PER_DAY / intraday_minutes)).max(1e-12);
     let sigma_intra = sigma_day * intra_scale.sqrt();
     for slot in sigma_eff[start..intra_end].iter_mut() {
         *slot = sigma_intra;
@@ -239,13 +276,13 @@ fn median_inplace(buf: &mut Vec<f64>) -> Option<f64> {
 mod tests {
     use super::*;
     use crate::{
+        OptionType,
         config::{Config, DEFAULT_CONFIG},
         context::Context,
         leg::LegBuilder,
         leg_universe::LegUniverse,
         position::Position,
         raw_option_chain::parse_option_chain_file,
-        OptionType,
     };
     use chrono::NaiveDate;
     use serde::Deserialize;
@@ -267,7 +304,8 @@ mod tests {
         ensure_market_data_db(&manifest_dir);
 
         let chain_path = manifest_dir.join("tests/fixtures/ARM_option_chain_20250908_160038.json");
-        let raw_chain = parse_option_chain_file(&chain_path).expect("failed to load option chain fixture");
+        let raw_chain =
+            parse_option_chain_file(&chain_path).expect("failed to load option chain fixture");
         let mut context = Context::from_raw_option_chain("ARM", &raw_chain);
         context.config = Config {
             paths: 2,
@@ -294,7 +332,8 @@ mod tests {
         let steps = scenario.dt_years.len();
         let paths = context.config.paths;
 
-        let reference: Reference = serde_json::from_str(REF_JSON).expect("failed to parse reference fixture");
+        let reference: Reference =
+            serde_json::from_str(REF_JSON).expect("failed to parse reference fixture");
 
         assert_eq!(steps, reference.dt_years.len());
         assert_eq!(scenario.tau_driver.len(), steps);
@@ -302,8 +341,18 @@ mod tests {
         assert_eq!(scenario.s_path.len(), steps * paths);
 
         assert_close_slice(&scenario.dt_years, &reference.dt_years, 1e-12, "dt_years");
-        assert_close_slice(&scenario.tau_driver, &reference.tau_left, 1e-12, "tau_driver");
-        assert_close_slice(&scenario.iv_mult_path, &reference.iv_mult_path, 1e-12, "iv_mult_path");
+        assert_close_slice(
+            &scenario.tau_driver,
+            &reference.tau_left,
+            1e-12,
+            "tau_driver",
+        );
+        assert_close_slice(
+            &scenario.iv_mult_path,
+            &reference.iv_mult_path,
+            1e-12,
+            "iv_mult_path",
+        );
 
         // s_path uses a different RNG stream than the Python run that produced the fixture,
         // so we only sanity-check shape/positivity instead of exact values.

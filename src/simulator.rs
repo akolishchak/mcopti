@@ -143,7 +143,7 @@ impl Simulator {
                     let src: &[f64] = match leg.option_type {
                         OptionType::Call => row_call.get_or_insert_with(|| vol_surface.row(OptionType::Call, tau_to_expire)),
                         OptionType::Put  => row_put .get_or_insert_with(|| vol_surface.row(OptionType::Put,  tau_to_expire)),
-                    };                    
+                    };
                     rows.extend(
                         src
                         .iter()
@@ -278,5 +278,266 @@ impl Simulator {
         }
         Some(metrics)
     }
+}
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        config::{Config, DEFAULT_CONFIG},
+        leg::LegBuilder,
+        position::Position,
+        raw_option_chain::parse_option_chain_file,
+    };
+    use chrono::NaiveDate;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn load_context() -> Context {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        ensure_market_data_db(&manifest_dir);
+        let chain_path = manifest_dir.join("tests/fixtures/ARM_option_chain_20250908_160038.json");
+        let raw_chain =
+            parse_option_chain_file(&chain_path).expect("failed to load option chain fixture");
+        Context::from_raw_option_chain("ARM", &raw_chain)
+    }
+
+    fn assert_close(got: f64, want: f64, tol: f64, label: &str) {
+        let diff = (got - want).abs();
+        assert!(
+            diff < tol,
+            "{label} mismatch: expected {want}, got {got}, diff {diff}"
+        );
+    }
+
+    #[test]
+    fn expected_values_match_credit_spreads() {
+        let mut context = load_context();
+        context.config = Config {
+            paths: 2,
+            seed: 7,
+            iv_floor: 1.0,
+            ..DEFAULT_CONFIG
+        };
+
+        let expiry = NaiveDate::from_ymd_opt(2025, 9, 12).unwrap();
+        let builder = LegBuilder::new(&context);
+        let short_call = builder
+            .create(OptionType::Call, 150.0, expiry)
+            .expect("missing short call");
+        let long_call = builder
+            .create(OptionType::Call, 155.0, expiry)
+            .expect("missing long call");
+        let short_put = builder
+            .create(OptionType::Put, 125.0, expiry)
+            .expect("missing short put");
+        let long_put = builder
+            .create(OptionType::Put, 120.0, expiry)
+            .expect("missing long put");
+
+        let mut call_spread = Position::new();
+        call_spread.push(short_call, -1);
+        call_spread.push(long_call, 1);
+
+        let mut put_spread = Position::new();
+        put_spread.push(short_put, -1);
+        put_spread.push(long_put, 1);
+
+        let universe = LegUniverse::from_positions(vec![call_spread, put_spread]);
+        let scenario = Scenario::new(&context, &universe);
+        let metrics = Simulator::new()
+            .run(&context, &universe, &scenario)
+            .expect("simulation returned no metrics");
+        assert_eq!(metrics.len(), 2);
+
+        //   (Ks, Kl) = (150, 155) call -> best_ev = 0.21
+        //   (Ks, Kl) = (125, 120) put  -> best_ev = 0.125
+        assert_close(
+            metrics[0].expected_value,
+            0.210_000_000_000_000,
+            1e-12,
+            "call spread expected_value",
+        );
+        assert_close(
+            metrics[1].expected_value,
+            0.125_000_000_000_000,
+            1e-12,
+            "put spread expected_value",
+        );
+
+        assert_close(
+            metrics[0].risk,
+            0.573_660_576_019_878,
+            1e-12,
+            "call spread risk",
+        );
+        assert_close(
+            metrics[1].risk,
+            0.573_851_912_888_447,
+            1e-12,
+            "put spread risk",
+        );
+    }
+
+    #[test]
+    fn run_returns_none_when_scenario_has_no_steps() {
+        let context = load_context();
+        let expiry = NaiveDate::from_ymd_opt(2025, 9, 12).unwrap();
+        let builder = LegBuilder::new(&context);
+        let call = builder
+            .create(OptionType::Call, 150.0, expiry)
+            .expect("missing call leg");
+
+        let mut position = Position::new();
+        position.push(call, 1);
+        let universe = LegUniverse::from_positions(vec![position]);
+
+        let scenario = Scenario {
+            dt_years: vec![],
+            tau_driver: vec![],
+            iv_mult_path: vec![],
+            s_path: vec![],
+        };
+
+        let metrics = Simulator::new().run(&context, &universe, &scenario);
+        assert!(metrics.is_none(), "expected None for zero-step scenario");
+    }
+
+    #[test]
+    fn run_pre_expiry_matches_manual_surface_pricing() {
+        let context = load_context();
+        let expiry = NaiveDate::from_ymd_opt(2025, 9, 12).unwrap();
+        let builder = LegBuilder::new(&context);
+        let call = builder
+            .create(OptionType::Call, 150.0, expiry)
+            .expect("missing call leg");
+        let put = builder
+            .create(OptionType::Put, 150.0, expiry)
+            .expect("missing put leg");
+
+        let mut position = Position::new();
+        position.push(call, 1);
+        position.push(put, 1);
+        let premium = position.premium;
+        let universe = LegUniverse::from_positions(vec![position]);
+
+        let s = 145.0;
+        let tau = 0.25;
+        let iv_mult = 1.3;
+        let scenario = Scenario {
+            dt_years: vec![0.0],
+            tau_driver: vec![tau],
+            iv_mult_path: vec![iv_mult],
+            s_path: vec![s],
+        };
+
+        let metrics = Simulator::new()
+            .run(&context, &universe, &scenario)
+            .expect("simulation returned no metrics");
+        assert_eq!(metrics.len(), 1);
+
+        let scale = iv_mult * iv_mult;
+
+        let k_call = call.strike.ln() - s.ln();
+        let w_call =
+            interp_linear_kgrid(k_call, &context.vol_surface.row(OptionType::Call, tau)) * scale;
+        let iv_call = (w_call / tau).sqrt();
+        let call_mark = bs_price(OptionType::Call, s, call.strike, tau, iv_call);
+
+        let k_put = put.strike.ln() - s.ln();
+        let w_put =
+            interp_linear_kgrid(k_put, &context.vol_surface.row(OptionType::Put, tau)) * scale;
+        let iv_put = (w_put / tau).sqrt();
+        let put_mark = bs_price(OptionType::Put, s, put.strike, tau, iv_put);
+
+        let total_mark = call_mark + put_mark;
+        let expected_value = total_mark - premium;
+        let risk = (premium - total_mark).max(0.0);
+
+        assert_close(
+            metrics[0].expected_value,
+            expected_value,
+            1e-10,
+            "expected_value",
+        );
+        assert_close(metrics[0].risk, risk, 1e-10, "risk");
+    }
+
+    #[test]
+    fn run_post_expiry_uses_intrinsic_and_tracks_worst_min() {
+        let context = load_context();
+        let expiry = NaiveDate::from_ymd_opt(2025, 9, 12).unwrap();
+        let builder = LegBuilder::new(&context);
+        let call = builder
+            .create(OptionType::Call, 150.0, expiry)
+            .expect("missing call leg");
+
+        let mut long_call = Position::new();
+        long_call.push(call, 1);
+        let long_premium = long_call.premium;
+
+        let mut short_call = Position::new();
+        short_call.push(call, -1);
+        let short_premium = short_call.premium;
+
+        let universe = LegUniverse::from_positions(vec![long_call, short_call]);
+
+        let scenario = Scenario {
+            dt_years: vec![0.0, 0.0, 0.0],
+            tau_driver: vec![0.0, 0.0, 0.0],
+            iv_mult_path: vec![1.0, 1.0, 1.0],
+            // Two paths, three steps each. With tau exhausted at step zero, intrinsic
+            // is locked from the first step of each path and stays flat.
+            s_path: vec![140.0, 180.0, 200.0, 170.0, 160.0, 150.0],
+        };
+
+        let metrics = Simulator::new()
+            .run(&context, &universe, &scenario)
+            .expect("simulation returned no metrics");
+        assert_eq!(metrics.len(), 2);
+
+        let intrinsic_path_1 = (140.0_f64 - call.strike).max(0.0);
+        let intrinsic_path_2 = (170.0_f64 - call.strike).max(0.0);
+        let long_avg_last = (intrinsic_path_1 + intrinsic_path_2) * 0.5;
+        let long_worst_min = intrinsic_path_1.min(intrinsic_path_2);
+
+        let expected_long_ev = long_avg_last - long_premium;
+        let expected_long_risk = (long_premium - long_worst_min).max(0.0);
+        assert_close(
+            metrics[0].expected_value,
+            expected_long_ev,
+            1e-10,
+            "long expected_value",
+        );
+        assert_close(metrics[0].risk, expected_long_risk, 1e-10, "long risk");
+
+        let short_avg_last = -long_avg_last;
+        let short_worst_min = (-intrinsic_path_1).min(-intrinsic_path_2);
+        let expected_short_ev = short_avg_last - short_premium;
+        let expected_short_risk = (short_premium - short_worst_min).max(0.0);
+        assert_close(
+            metrics[1].expected_value,
+            expected_short_ev,
+            1e-10,
+            "short expected_value",
+        );
+        assert_close(metrics[1].risk, expected_short_risk, 1e-10, "short risk");
+    }
+
+    fn ensure_market_data_db(manifest_dir: &PathBuf) {
+        let fixture_db = manifest_dir.join("tests/fixtures/market_data_1d.db");
+        let local_db = manifest_dir.join("data/market_data_1d.db");
+        let needs_copy = match (fs::metadata(&fixture_db), fs::metadata(&local_db)) {
+            (Ok(f_meta), Ok(l_meta)) => f_meta.len() != l_meta.len(),
+            (Ok(_), Err(_)) => true,
+            _ => true,
+        };
+
+        if needs_copy {
+            if let Some(parent) = local_db.parent() {
+                fs::create_dir_all(parent).expect("failed to create data dir");
+            }
+            fs::copy(&fixture_db, &local_db).expect("failed to copy fixture market data db");
+        }
+    }
 }

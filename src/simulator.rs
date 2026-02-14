@@ -3,6 +3,7 @@
 use crate::{Context, LegUniverse, OptionType, Scenario, bs_price, interp_linear_kgrid, linspace_vec};
 use rayon::prelude::*;
 use std::borrow::Cow;
+use std::{error::Error, fmt};
 
 const SECONDS_PER_YEAR: f64 = 365.0 * 24.0 * 3600.0;
 const EPSILON: f64 = 1e-8;
@@ -13,10 +14,30 @@ pub struct Simulator {
     close_slippage_frac: f64,
 }
 
+#[derive(Debug)]
 pub struct Metrics {
     pub expected_value: f64,
     pub risk: f64,
 }
+
+#[derive(Debug)]
+pub enum SimulatorError {
+    InvalidInput(&'static str),
+    EmptyExpirySlice { expire_id: usize },
+}
+
+impl fmt::Display for SimulatorError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidInput(msg) => write!(f, "invalid simulation input: {msg}"),
+            Self::EmptyExpirySlice { expire_id } => {
+                write!(f, "empty expiry slice for expire_id={expire_id}")
+            }
+        }
+    }
+}
+
+impl Error for SimulatorError {}
 
 struct ExpiryData {
     taus: Vec<f64>,
@@ -85,7 +106,12 @@ impl Simulator {
     }
 
     // returns per-position metrics (expected value and drawdown-based risk) across paths.
-    pub fn run(&self, context: &Context, universe: &LegUniverse, scenario: &Scenario) -> Option<Vec<Metrics>> {
+    pub fn run(
+        &self,
+        context: &Context,
+        universe: &LegUniverse,
+        scenario: &Scenario,
+    ) -> Result<Vec<Metrics>, SimulatorError> {
         let calendar = &context.calendar;
         let vol_surface = &context.vol_surface;
         let s_path = &scenario.s_path;
@@ -100,22 +126,30 @@ impl Simulator {
         let ln_strike: Vec<f64> = universe.legs.iter().map(|leg| leg.strike.ln()).collect();
         let (_, max_expiry_close) = calendar.session(max_expire);
         if steps == 0 || leg_count == 0 {
-            return None;
+            return Err(SimulatorError::InvalidInput(
+                "scenario has zero steps or universe has zero legs",
+            ));
         }
         // Scenario paths are stored as contiguous [path][step] blocks.
         let paths = s_path.len() / steps;
         if paths == 0 {
-            return None;
+            return Err(SimulatorError::InvalidInput("scenario has zero paths"));
         }
         let row_stride = vol_surface.row_len();
         if row_stride == 0 {
-            return None;
+            return Err(SimulatorError::InvalidInput("vol surface row length is zero"));
         }
 
         // walk expiries in order so we can align each slice to the common tau grid and reuse precomputed rows.
         let mut expiry_data: Vec<ExpiryData> = Vec::with_capacity(universe.expiries());
         for expire_slice in universe.expiry_slices() {
-            let (_, leg_close) = calendar.session(expire_slice.legs.first().unwrap().expire);
+            let first_leg = expire_slice
+                .legs
+                .first()
+                .ok_or(SimulatorError::EmptyExpirySlice {
+                    expire_id: expire_slice.expire_id,
+                })?;
+            let (_, leg_close) = calendar.session(first_leg.expire);
             // Align this expiry's timeline with the global driver so tau hits zero when the slice expires.
             let tau_offset = ((max_expiry_close - leg_close).as_seconds_f64() / SECONDS_PER_YEAR).max(0.0);
             let legs_in_expiry = expire_slice.legs.len();
@@ -276,7 +310,7 @@ impl Simulator {
                 risk,
             });
         }
-        Some(metrics)
+        Ok(metrics)
     }
 }
 
@@ -344,7 +378,8 @@ mod tests {
         put_spread.push(long_put, 1);
 
         let universe = LegUniverse::from_positions(vec![call_spread, put_spread]);
-        let scenario = Scenario::new(&context, &universe);
+        let scenario = Scenario::new(&context, &universe)
+            .expect("failed to build scenario");
         let metrics = Simulator::new()
             .run(&context, &universe, &scenario)
             .expect("simulation returned no metrics");
@@ -380,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn run_returns_none_when_scenario_has_no_steps() {
+    fn run_returns_error_when_scenario_has_no_steps() {
         let context = load_context();
         let expiry = NaiveDate::from_ymd_opt(2025, 9, 12).unwrap();
         let builder = LegBuilder::new(&context);
@@ -399,8 +434,13 @@ mod tests {
             s_path: vec![],
         };
 
-        let metrics = Simulator::new().run(&context, &universe, &scenario);
-        assert!(metrics.is_none(), "expected None for zero-step scenario");
+        let err = Simulator::new()
+            .run(&context, &universe, &scenario)
+            .expect_err("expected error for zero-step scenario");
+        assert!(
+            matches!(err, SimulatorError::InvalidInput(_)),
+            "expected invalid input error"
+        );
     }
 
     #[test]

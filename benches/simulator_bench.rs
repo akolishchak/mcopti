@@ -14,7 +14,8 @@ fn bench_simulator_run(c: &mut Criterion) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     ensure_market_data_db(&manifest_dir);
     let (context, universe) = build_case(100_000, &manifest_dir);
-    let scenario = Scenario::new(&context, &universe);
+    let scenario = Scenario::new(&context, &universe)
+        .expect("failed to build scenario");
 
     c.bench_function("simulator_run_paths_100k", |b| {
         b.iter(|| {

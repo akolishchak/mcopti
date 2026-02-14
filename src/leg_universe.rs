@@ -39,13 +39,13 @@ impl LegUniverse {
         let mut put_present = false;
 
         for position in positions.iter() {
-            for &(leg, _) in position.legs.iter() {
+            for (leg, _) in position.legs.iter() {
                 match &leg.option_type {
                     OptionType::Call => call_present = true,
                     OptionType::Put => put_present = true,
                 }
                 max_expire = max_expire.max(leg.expire);
-                legs.push(leg);
+                legs.push(*leg);
             }
         }
 
@@ -62,7 +62,7 @@ impl LegUniverse {
 
         for position in positions.iter() {
             let mut position_legs = Vec::with_capacity(position.legs.len());
-            for &(leg, qty) in position.legs.iter() {
+            for (leg, qty) in position.legs.iter() {
                 let idx = legs
                     .binary_search_by(|l| {
                         (l.expire_id, l.option_type)
@@ -70,7 +70,7 @@ impl LegUniverse {
                             .then_with(|| l.strike.total_cmp(&leg.strike))
                     })
                     .expect("leg not found after universe build");
-                position_legs.push((idx, qty));
+                position_legs.push((idx, *qty));
             }
             positions_idx.push(position_legs);
         }

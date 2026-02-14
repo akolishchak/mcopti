@@ -1,6 +1,7 @@
 //! Realized volatility estimates derived from market data.
 
 use chrono::{Duration, NaiveDate};
+use std::{error::Error, fmt};
 
 use crate::market_data::DbMode;
 use crate::{Column, MarketData};
@@ -10,31 +11,72 @@ pub struct HistoricalVolatility {
     returns: Vec<f64>,
 }
 
+#[derive(Debug)]
+pub enum HistoricalVolatilityError {
+    MarketData(rusqlite::Error),
+}
+
+impl fmt::Display for HistoricalVolatilityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MarketData(e) => write!(f, "market data error: {e}"),
+        }
+    }
+}
+
+impl Error for HistoricalVolatilityError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::MarketData(e) => Some(e),
+        }
+    }
+}
+
+impl From<rusqlite::Error> for HistoricalVolatilityError {
+    fn from(value: rusqlite::Error) -> Self {
+        Self::MarketData(value)
+    }
+}
+
 impl HistoricalVolatility {
-    pub fn new(ticker: &str, as_of: NaiveDate, max_lookback_days: i64) -> Self {
+    pub fn new(
+        ticker: &str,
+        as_of: NaiveDate,
+        max_lookback_days: i64,
+    ) -> Result<Self, HistoricalVolatilityError> {
         Self::with_data_dir(ticker, as_of, max_lookback_days, "data")
     }
 
-    pub fn with_data_dir(ticker: &str, as_of: NaiveDate, max_lookback_days: i64, data_dir: &str) -> Self {
-        let md = MarketData::new(data_dir, "1d", DbMode::Read).unwrap();
+    pub fn with_data_dir(
+        ticker: &str,
+        as_of: NaiveDate,
+        max_lookback_days: i64,
+        data_dir: &str,
+    ) -> Result<Self, HistoricalVolatilityError> {
+        let md = MarketData::new(data_dir, "1d", DbMode::Read)?;
         Self::from_market_data(md, ticker, as_of, max_lookback_days)
     }
 
-    fn from_market_data(md: MarketData, ticker: &str, as_of: NaiveDate, max_lookback_days: i64) -> Self {
+    fn from_market_data(
+        md: MarketData,
+        ticker: &str,
+        as_of: NaiveDate,
+        max_lookback_days: i64,
+    ) -> Result<Self, HistoricalVolatilityError> {
         let start_dt = as_of - Duration::days(max_lookback_days + 10);
         let data = md
             .columns(&[Column::CoLogAdj, Column::OcLogAdj])
             .fetch(ticker, start_dt, as_of)
-            .unwrap();
+            ?;
         // full daily log returns (close-to-close) = co_log_adj + oc_log_adj
         let returns: Vec<_> = data
             .into_iter()
             .map(|(_, values)| values.into_iter().sum::<f64>())
             .collect();
 
-        Self {
+        Ok(Self {
             returns,
-        }
+        })
     }
 
     pub fn rv(&self, lookback_days: i64) -> f64 {
@@ -68,7 +110,8 @@ mod tests {
     #[test]
     fn rv_matches_values() {
         let as_of = NaiveDate::from_ymd_opt(2023, 6, 30).unwrap();
-        let hv = HistoricalVolatility::with_data_dir("MSFT", as_of, 160, FIXTURE_DIR);
+        let hv = HistoricalVolatility::with_data_dir("MSFT", as_of, 160, FIXTURE_DIR)
+            .expect("failed to load market data fixture");
 
         let approx = |a: f64, b: f64| (a - b).abs() < 1e-12;
         assert!(approx(hv.rv(30), 0.244_401_957_887_463));
@@ -80,7 +123,8 @@ mod tests {
     #[should_panic]
     fn rv_panics_when_insufficient_history() {
         let as_of = NaiveDate::from_ymd_opt(2023, 6, 30).unwrap();
-        let hv = HistoricalVolatility::with_data_dir("MSFT", as_of, 10, FIXTURE_DIR);
+        let hv = HistoricalVolatility::with_data_dir("MSFT", as_of, 10, FIXTURE_DIR)
+            .expect("failed to load market data fixture");
         let _ = hv.rv(120);
     }
 }

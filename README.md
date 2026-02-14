@@ -47,7 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     pos.push(long, 1);
 
     let universe = LegUniverse::from_positions(vec![pos]);
-    let scenario = Scenario::new(&ctx, &universe);
+    let scenario = Scenario::new(&ctx, &universe)?;
     let sim = Simulator::new();
     let metrics = sim
         .run(&ctx, &universe, &scenario)
@@ -76,7 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Shapes and outputs
 - `VolSurface::row` returns total variance across a fixed log-moneyness grid; `VolSurface::iv`
   returns implied vol.
-- `Simulator::run` returns `Option<Vec<Metrics>>`, one `Metrics` per position:
+- `Simulator::run` returns `Result<Vec<Metrics>, SimulatorError>`, one `Metrics` per position:
   `expected_value` and drawdown-based `risk`.
 
 ## Module map

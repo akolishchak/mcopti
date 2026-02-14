@@ -5,8 +5,9 @@ use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 use rand_xoshiro::Xoshiro256PlusPlus;
 use rayon::prelude::*;
+use std::{error::Error, fmt};
 
-use crate::{Context, LegUniverse, OptionType, mu_table, vol_factor_table};
+use crate::{Context, LegUniverse, OptionType, VolDynamicsError, mu_table, vol_factor_table};
 
 const SECONDS_PER_YEAR: f64 = 365.0 * 24.0 * 3600.0;
 const MINUTES_PER_DAY: f64 = 24.0 * 60.0;
@@ -21,8 +22,35 @@ pub struct Scenario {
     pub s_path: Vec<f64>,
 }
 
+#[derive(Debug)]
+pub enum ScenarioError {
+    VolDynamics(VolDynamicsError),
+}
+
+impl fmt::Display for ScenarioError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::VolDynamics(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl Error for ScenarioError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::VolDynamics(e) => Some(e),
+        }
+    }
+}
+
+impl From<VolDynamicsError> for ScenarioError {
+    fn from(value: VolDynamicsError) -> Self {
+        Self::VolDynamics(value)
+    }
+}
+
 impl Scenario {
-    pub fn new(context: &Context, leg_universe: &LegUniverse) -> Self {
+    pub fn new(context: &Context, leg_universe: &LegUniverse) -> Result<Self, ScenarioError> {
         let start_date = context.option_chain.date;
         let expiry_date = leg_universe.max_expire;
         let calendar = &context.calendar;
@@ -64,10 +92,10 @@ impl Scenario {
             side,
             ncal_max,
             factor_clamp,
-        );
+        )?;
         let iv_level_clamp = context.config.iv_level_clamp;
         // Real-world drift: long-horizon log-slope; fallback to 0 if unavailable
-        let mu_trend = mu_table(&context.ticker, start_date, (-0.3, 0.3));
+        let mu_trend = mu_table(&context.ticker, start_date, (-0.3, 0.3))?;
         let s0 = context.option_chain.spot;
         // TODO: per-strategy strikes (e.g., short strike for spreads) instead of s0-only lookup
         // Use a floor strike to avoid unrealistically low IV in the wings.
@@ -214,12 +242,12 @@ impl Scenario {
                 }
             });
 
-        Self {
+        Ok(Self {
             dt_years,
             tau_driver,
             iv_mult_path,
             s_path,
-        }
+        })
     }
 }
 
@@ -328,7 +356,8 @@ mod tests {
         position.push(long, 1);
         let leg_universe = LegUniverse::from_positions(vec![position]);
 
-        let scenario = Scenario::new(&context, &leg_universe);
+        let scenario =
+            Scenario::new(&context, &leg_universe).expect("failed to build scenario");
         let steps = scenario.dt_years.len();
         let paths = context.config.paths;
 

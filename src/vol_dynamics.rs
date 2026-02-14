@@ -1,12 +1,65 @@
 //! Volatility scaling and drift helpers driven by historical data.
 
 use chrono::{NaiveDate, Duration};
+use std::{error::Error, fmt};
 
-use crate::{Column, HistoricalVolatility, MarketData, OptionType, MarketCalendar, VolSurface};
+use crate::{
+    Column,
+    HistoricalVolatility,
+    HistoricalVolatilityError,
+    MarketCalendar,
+    MarketData,
+    OptionType,
+    VolSurface,
+};
 
-pub fn vol_factor_table(ticker: &str, as_of: NaiveDate, volsurface: &VolSurface, calendar: &MarketCalendar, side: OptionType, ncal_max: i64, clamp: (f64, f64)) -> Vec<f64> {
+#[derive(Debug)]
+pub enum VolDynamicsError {
+    MarketData(rusqlite::Error),
+    HistoricalVolatility(HistoricalVolatilityError),
+}
 
-    let hv = HistoricalVolatility::new(ticker, as_of, ncal_max);
+impl fmt::Display for VolDynamicsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MarketData(e) => write!(f, "market data error: {e}"),
+            Self::HistoricalVolatility(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl Error for VolDynamicsError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::MarketData(e) => Some(e),
+            Self::HistoricalVolatility(e) => Some(e),
+        }
+    }
+}
+
+impl From<rusqlite::Error> for VolDynamicsError {
+    fn from(value: rusqlite::Error) -> Self {
+        Self::MarketData(value)
+    }
+}
+
+impl From<HistoricalVolatilityError> for VolDynamicsError {
+    fn from(value: HistoricalVolatilityError) -> Self {
+        Self::HistoricalVolatility(value)
+    }
+}
+
+pub fn vol_factor_table(
+    ticker: &str,
+    as_of: NaiveDate,
+    volsurface: &VolSurface,
+    calendar: &MarketCalendar,
+    side: OptionType,
+    ncal_max: i64,
+    clamp: (f64, f64),
+) -> Result<Vec<f64>, VolDynamicsError> {
+
+    let hv = HistoricalVolatility::new(ticker, as_of, ncal_max)?;
     let mut td = 0;
     let td_cum: Vec<_> = (1..=ncal_max)
         .map(|d| {
@@ -28,25 +81,25 @@ pub fn vol_factor_table(ticker: &str, as_of: NaiveDate, volsurface: &VolSurface,
         f_by_day.push((rv / iv_now).clamp(clamp.0, clamp.1));
     }
 
-    f_by_day
+    Ok(f_by_day)
 }
 
-pub fn mu_table(ticker: &str, as_of: NaiveDate, clamp: (f64, f64)) -> f64 {
+pub fn mu_table(ticker: &str, as_of: NaiveDate, clamp: (f64, f64)) -> Result<f64, VolDynamicsError> {
     // long-horizon trend: fit a single slope on log prices over a 120–250 trading day window
     const MIN_LOOKBACK: usize = 120;
     const MAX_LOOKBACK: usize = 250;
 
     let md = MarketData::default_read("1d")
-        .unwrap()
+        ?
         .columns(&[Column::AdjClose]);
 
     // fetch enough calendar days to cover the lookback band.
     let lookback_calendar = MAX_LOOKBACK as i64 * 2;
     let start_date = as_of - Duration::days(lookback_calendar);
-    let rows = md.fetch(ticker, start_date, as_of).unwrap();
+    let rows = md.fetch(ticker, start_date, as_of)?;
 
     if rows.len() < MIN_LOOKBACK {
-        return 0.0;
+        return Ok(0.0);
     }
 
     let window = rows.len().min(MAX_LOOKBACK);
@@ -71,7 +124,7 @@ pub fn mu_table(ticker: &str, as_of: NaiveDate, clamp: (f64, f64)) -> f64 {
     let cov = sum_tlog - (sum_t * sum_log) / n;
     let var_t = sum_tt - (sum_t * sum_t) / n;
     let slope = if var_t > 0.0 { cov / var_t } else { 0.0 };
-    slope.clamp(clamp.0, clamp.1)
+    Ok(slope.clamp(clamp.0, clamp.1))
 }
 
 
@@ -94,7 +147,16 @@ mod tests {
         let calendar = MarketCalendar::new(2024, 2026);
         let as_of = NaiveDate::from_ymd_opt(2025, 9, 5).unwrap();
 
-        let factors = vol_factor_table("ARM", as_of, &surface, &calendar, OptionType::Call, 30, (0.5, 3.0));
+        let factors = vol_factor_table(
+            "ARM",
+            as_of,
+            &surface,
+            &calendar,
+            OptionType::Call,
+            30,
+            (0.5, 3.0),
+        )
+        .expect("failed to build vol factor table");
 
         // Reference data generated via src/probability_vol_110.py::build_factor_table_from_hv
         // with the ARM chain fixture and atm_side='call'.
@@ -148,7 +210,7 @@ mod tests {
     fn mu_table_matches_reference() {
         ensure_market_data_db();
         let as_of = NaiveDate::from_ymd_opt(2025, 9, 5).unwrap();
-        let mu = mu_table("ARM", as_of, (-0.3, 0.3));
+        let mu = mu_table("ARM", as_of, (-0.3, 0.3)).expect("failed to build mu table");
 
         // Expected drift from long-horizon log-slope (see src/probability_vol_110.py replacement).
         let expected = -0.040_959_103_675_939_16;

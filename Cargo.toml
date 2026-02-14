@@ -25,3 +25,7 @@ criterion = "0.5"
 [[bench]]
 name = "scenario_bench"
 harness = false
+
+[[bench]]
+name = "simulator_bench"
+harness = false

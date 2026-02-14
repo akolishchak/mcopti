@@ -17,7 +17,8 @@ fn bench_scenario_new(c: &mut Criterion) {
 
     c.bench_function("scenario_new_paths_100k", |b| {
         b.iter(|| {
-            let scenario = Scenario::new(black_box(&context), black_box(&leg_universe));
+            let scenario = Scenario::new(black_box(&context), black_box(&leg_universe))
+                .expect("failed to build scenario");
             black_box(scenario);
         });
     });

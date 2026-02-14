@@ -1,6 +1,7 @@
 //! Option leg definition and builder for validated strikes and expiries.
 
 use chrono::NaiveDate;
+use std::{error::Error, fmt};
 
 use crate::{OptionType, Context};
 
@@ -18,6 +19,23 @@ pub struct Leg {
 pub struct LegBuilder<'a> {
     context: &'a Context,
 }
+
+#[derive(Debug)]
+pub enum LegBuilderError {
+    WrongExpire(NaiveDate),
+    WrongStrike(f64),
+}
+
+impl fmt::Display for LegBuilderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WrongExpire(date) => write!(f, "invalid expiration date: {date}"),
+            Self::WrongStrike(strike) => write!(f, "invalid strike: {strike}"),
+        }
+    }
+}
+
+impl Error for LegBuilderError {}
 
 impl<'a> LegBuilder<'a> {
     pub fn new(context: &'a Context) -> Self {
@@ -50,17 +68,3 @@ impl<'a> LegBuilder<'a> {
         })
     }
 }
-
-#[derive(Debug)]
-pub enum LegBuilderError {
-    WrongExpire(NaiveDate),
-    WrongStrike(f64),
-}
-
-// impl fmmt::Display for LegBuilderError {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         match self {
-//             LegBuilderError::WrongExpire(date) => write!(f, "wrong ")
-//         }
-//     }
-// }

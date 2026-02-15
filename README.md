@@ -74,6 +74,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 - The market calendar is US equities (New York time) with standard holidays and
   early closes.
 
+## Market data ingest CLI
+Use the built-in binary to create/update `data/market_data_1d.db` from Yahoo Finance data.
+
+Run:
+```
+cargo run --bin ingest_market_data -- <ticker|file_name> [start YYYY-MM-DD] [end YYYY-MM-DD]
+```
+
+Examples:
+```
+cargo run --bin ingest_market_data -- AAPL
+cargo run --bin ingest_market_data -- AAPL 2024-01-01
+cargo run --bin ingest_market_data -- tickers.txt 2024-01-01 2025-01-01
+```
+
 ## Shapes and outputs
 - `VolSurface::row` returns total variance across a fixed log-moneyness grid; `VolSurface::iv`
   returns implied vol.

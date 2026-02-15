@@ -5,6 +5,8 @@ use chrono_tz::America::New_York;
 use rusqlite::{Connection, Error, OpenFlags, Result, params};
 use serde::Deserialize;
 use std::collections::VecDeque;
+use std::error::Error as StdError;
+use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
 
@@ -72,6 +74,52 @@ pub enum DbMode {
     Read,
     Write,
 }
+
+#[derive(Debug)]
+pub enum IngestError {
+    Db(rusqlite::Error),
+    Http(ureq::Error),
+    Decode(std::io::Error),
+}
+
+impl Display for IngestError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Db(e) => write!(f, "database error: {e}"),
+            Self::Http(e) => write!(f, "http request failed: {e}"),
+            Self::Decode(e) => write!(f, "response decode failed: {e}"),
+        }
+    }
+}
+
+impl StdError for IngestError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Db(e) => Some(e),
+            Self::Http(e) => Some(e),
+            Self::Decode(e) => Some(e),
+        }
+    }
+}
+
+impl From<rusqlite::Error> for IngestError {
+    fn from(value: rusqlite::Error) -> Self {
+        Self::Db(value)
+    }
+}
+
+impl From<ureq::Error> for IngestError {
+    fn from(value: ureq::Error) -> Self {
+        Self::Http(value)
+    }
+}
+
+impl From<std::io::Error> for IngestError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Decode(value)
+    }
+}
+
 pub struct MarketData {
     connection: Connection,
     columns: Option<String>,
@@ -209,7 +257,13 @@ impl MarketData {
         .collect()
     }
 
-    pub fn ingest(&mut self, ticker: &str, resolution: &str, start: NaiveDate, end: NaiveDate) -> Result<()> {
+    pub fn ingest(
+        &mut self,
+        ticker: &str,
+        resolution: &str,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> std::result::Result<(), IngestError> {
         let step = Self::resolution_steps(resolution);
         let start_ts = start
             .and_hms_opt(0, 0, 0)
@@ -242,9 +296,9 @@ impl MarketData {
             .query("includeAdjustedClose", "true")
             .set("User-Agent", "Mozilla/5.0")
             .call()
-            .map_err(external_error)?
+            .map_err(IngestError::Http)?
             .into_json::<YahooChartResponse>()
-            .map_err(external_error)?;
+            .map_err(IngestError::Decode)?;
         if body.chart.result.is_empty() {
             return Ok(());
         }
@@ -362,12 +416,13 @@ impl MarketData {
 
         let ticker_upper = ticker.to_ascii_uppercase();
         let derived = if resolution == "1d" {
-            self.compute_daily_derived(&ticker_upper, &rows)?
+            self.compute_daily_derived(&ticker_upper, &rows)
+                .map_err(IngestError::Db)?
         } else {
             DailyDerived::new(rows.len())
         };
 
-        let tx = self.connection.transaction()?;
+        let tx = self.connection.transaction().map_err(IngestError::Db)?;
         {
             let mut stmt = tx.prepare_cached(
                 "INSERT OR IGNORE INTO candles
@@ -377,7 +432,8 @@ impl MarketData {
                  vol20,vol20_adj,vol_trend20,adjclose_trend20,
                  vol_rank6,vol_rank9,vol_rank12)
                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)"
-            )?;
+            )
+            .map_err(IngestError::Db)?;
 
             for (i, row) in rows.iter().enumerate() {
                 stmt.execute(params![
@@ -405,10 +461,11 @@ impl MarketData {
                     derived.vol_rank6[i],
                     derived.vol_rank9[i],
                     derived.vol_rank12[i]
-                ])?;
+                ])
+                .map_err(IngestError::Db)?;
             }
         }
-        tx.commit()?;
+        tx.commit().map_err(IngestError::Db)?;
         Ok(())
     }
 
@@ -848,13 +905,6 @@ impl PercentileWindow {
             }
         }
     }
-}
-
-fn external_error<E>(error: E) -> Error
-where
-    E: std::fmt::Display,
-{
-    Error::ToSqlConversionFailure(Box::new(std::io::Error::other(error.to_string())))
 }
 
 #[derive(Default, Deserialize)]

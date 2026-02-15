@@ -24,7 +24,7 @@ pub use {
     volsurface::{VolSurface, interp_linear_kgrid, linspace_vec},
     pchip::Pchip,
     market_calendar::MarketCalendar,
-    market_data::{MarketData, Column},
+    market_data::{MarketData, Column, IngestError},
     historical_volatility::{HistoricalVolatility, HistoricalVolatilityError},
     option_math::{ncdf, bs_price, simulate_paths},
     vol_dynamics::{vol_factor_table, mu_table, VolDynamicsError},

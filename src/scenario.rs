@@ -1,6 +1,6 @@
 //! Build time grids, vol multipliers, and Monte Carlo spot paths.
 
-use chrono::Duration;
+use chrono::{Duration, NaiveDate};
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 use rand_xoshiro::Xoshiro256PlusPlus;
@@ -20,6 +20,10 @@ pub struct Scenario {
     pub tau_driver: Vec<f64>,
     pub iv_mult_path: Vec<f64>,
     pub s_path: Vec<f64>,
+    // Universe max expiry this scenario is aligned to.
+    pub max_expire: NaiveDate,
+    // Prefix integrated variance: var_cum[i] = sum_{j<i} sigma_eff[j]^2 * dt_years[j]
+    pub var_cum: Vec<f64>,
 }
 
 #[derive(Debug)]
@@ -203,6 +207,15 @@ impl Scenario {
         // s path simulation (lognormal with time-varying sigma and drift).
         let steps = sigma_eff.len();
 
+        // Prefix integrated variance over the whole scenario horizon.
+        // sqrt(var_cum[i]) is the log-return stdev from entry to the end of step (i-1).
+        let mut var_cum: Vec<f64> = Vec::with_capacity(steps + 1);
+        var_cum.push(0.0);
+        for (&sigma, &dt) in sigma_eff.iter().zip(dt_years.iter()) {
+            let prev = *var_cum.last().expect("var_cum initialized with 0.0");
+            var_cum.push(prev + sigma * sigma * dt);
+        }
+
         let vol_step: Vec<f64> = sigma_eff
             .iter()
             .zip(dt_years.iter())
@@ -247,6 +260,8 @@ impl Scenario {
             tau_driver,
             iv_mult_path,
             s_path,
+            max_expire: expiry_date,
+            var_cum,
         })
     }
 }

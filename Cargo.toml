@@ -29,3 +29,7 @@ harness = false
 [[bench]]
 name = "simulator_bench"
 harness = false
+
+[[bench]]
+name = "barriers_bench"
+harness = false

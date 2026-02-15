@@ -432,6 +432,8 @@ mod tests {
             tau_driver: vec![],
             iv_mult_path: vec![],
             s_path: vec![],
+            max_expire: expiry,
+            var_cum: vec![0.0],
         };
 
         let err = Simulator::new()
@@ -469,6 +471,8 @@ mod tests {
             tau_driver: vec![tau],
             iv_mult_path: vec![iv_mult],
             s_path: vec![s],
+            max_expire: expiry,
+            var_cum: vec![0.0, 0.0],
         };
 
         let metrics = Simulator::new()
@@ -529,6 +533,8 @@ mod tests {
             // Two paths, three steps each. With tau exhausted at step zero, intrinsic
             // is locked from the first step of each path and stays flat.
             s_path: vec![140.0, 180.0, 200.0, 170.0, 160.0, 150.0],
+            max_expire: expiry,
+            var_cum: vec![0.0, 0.0, 0.0, 0.0],
         };
 
         let metrics = Simulator::new()

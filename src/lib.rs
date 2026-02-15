@@ -15,6 +15,7 @@ pub mod position;
 pub mod leg_universe;
 pub mod scenario;
 pub mod simulator;
+pub mod entry_barriers;
 pub mod config;
 
 pub use {
@@ -33,5 +34,6 @@ pub use {
     leg_universe::LegUniverse,
     scenario::{Scenario, ScenarioError},
     simulator::{Simulator, SimulatorError},
+    entry_barriers::EntryBarriers,
     config::{Config, DEFAULT_CONFIG},
 };

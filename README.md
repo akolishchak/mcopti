@@ -16,6 +16,7 @@ multi-leg positions along Monte Carlo price paths driven by historical and impli
 - Historical volatility and drift from a SQLite market data store.
 - Scenario builder with intraday steps and overnight variance split.
 - Parallel Monte Carlo leg and position valuation using Rayon.
+- Entry barrier analytics (`z_win`, `z_loss`) via mark-to-spot inversion.
 
 ## Quickstart
 ```rust
@@ -78,6 +79,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   returns implied vol.
 - `Simulator::run` returns `Result<Vec<Metrics>, SimulatorError>`, one `Metrics` per position:
   `expected_value` and drawdown-based `risk`.
+- `EntryBarriers::new` computes per-position entry barrier z-scores (`z_win`, `z_loss`) from
+  target mark inversion and scenario volatility scaling.
 
 ## Module map
 - `src/raw_option_chain.rs`: parse option chain JSON into typed structs.
@@ -89,6 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `src/scenario.rs`: build time grids, vol multipliers, and Monte Carlo price paths.
 - `src/leg.rs`, `src/position.rs`, `src/leg_universe.rs`: multi-leg position structures.
 - `src/simulator.rs`: price legs and positions across scenario paths.
+- `src/entry_barriers.rs`: invert target marks to implied spot barriers and z-scores.
 
 ## Tests
 Run:
@@ -97,3 +101,16 @@ cargo test
 ```
 Tests use fixtures in `tests/fixtures` and will copy the market data DB into `data/`
 when needed.
+
+## Benchmarks
+Run all benches:
+```
+cargo bench
+```
+
+Run individual benches:
+```
+cargo bench --bench scenario_bench
+cargo bench --bench simulator_bench
+cargo bench --bench barriers_bench
+```

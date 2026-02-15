@@ -338,7 +338,6 @@ mod tests {
         dt_years: Vec<f64>,
         tau_left: Vec<f64>,
         iv_mult_path: Vec<f64>,
-        s_path: Vec<Vec<f64>>,
     }
 
     #[test]

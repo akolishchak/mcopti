@@ -134,7 +134,10 @@ impl OptionChainSide {
     pub fn strike(&self, strike: f64, expire_id: usize) -> Option<(f64, f64)> {
         let (start, end) = self.tau_range[expire_id];
         match self.strike[start..end].binary_search_by(|v| v.total_cmp(&strike)) {
-            Ok(id) => Some((self.mid[id], self.iv[id])),
+            Ok(local_id) => {
+                let id = start + local_id;
+                Some((self.mid[id], self.iv[id]))
+            }
             Err(_) => None
         }
     }
@@ -225,5 +228,28 @@ mod tests {
         assert_close(long.k[0], (110.0_f64 / 100.0_f64).ln());
         assert_close(long.mid[0], 2.3); // (2.0 + 2.6) / 2
         assert_close(long.iv[0], 0.25);
+    }
+
+    #[test]
+    fn strike_lookup_respects_expiry_bucket_offset() {
+        let trade_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        let exp_short = NaiveDate::from_ymd_opt(2025, 1, 15).unwrap();
+        let exp_long = NaiveDate::from_ymd_opt(2025, 2, 15).unwrap();
+
+        let raw = RawOptionChain {
+            date: trade_date,
+            last_price: 100.0,
+            data: vec![
+                mk_contract(trade_date, exp_short, 100.0, OptionType::Call, 1.0, 1.2, 0.20),
+                mk_contract(trade_date, exp_short, 105.0, OptionType::Call, 1.4, 1.8, 0.22),
+                mk_contract(trade_date, exp_long, 110.0, OptionType::Call, 2.0, 2.6, 0.25),
+            ],
+        };
+
+        let chain = OptionChain::from_raw(&raw);
+        let exp_id = chain.calls.expire_id(exp_long).expect("missing long expiry");
+        let (mid, iv) = chain.calls.strike(110.0, exp_id).expect("missing strike at long expiry");
+        assert_close(mid, 2.3);
+        assert_close(iv, 0.25);
     }
 }

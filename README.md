@@ -64,6 +64,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+Run the same example from the repository root:
+```
+cargo run --example getting_started
+```
 
 ## Data and assumptions
 - Option chain input should be grouped by expiration and sorted by strike within each

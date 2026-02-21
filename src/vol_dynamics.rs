@@ -1,16 +1,11 @@
 //! Volatility scaling and drift helpers driven by historical data.
 
-use chrono::{NaiveDate, Duration};
+use chrono::{Duration, NaiveDate};
 use std::{error::Error, fmt};
 
 use crate::{
-    Column,
-    HistoricalVolatility,
-    HistoricalVolatilityError,
-    MarketCalendar,
-    MarketData,
-    OptionType,
-    VolSurface,
+    Column, HistoricalVolatility, HistoricalVolatilityError, MarketCalendar, MarketData,
+    OptionType, VolSurface,
 };
 
 #[derive(Debug)]
@@ -58,7 +53,6 @@ pub fn vol_factor_table(
     ncal_max: i64,
     clamp: (f64, f64),
 ) -> Result<Vec<f64>, VolDynamicsError> {
-
     let hv = HistoricalVolatility::new(ticker, as_of, ncal_max)?;
     let mut td = 0;
     let td_cum: Vec<_> = (1..=ncal_max)
@@ -71,7 +65,7 @@ pub fn vol_factor_table(
         })
         .collect();
 
-    let mut f_by_day = Vec::with_capacity(ncal_max as usize +1);
+    let mut f_by_day = Vec::with_capacity(ncal_max as usize + 1);
     f_by_day.push(f64::NAN);
     for (d, &tdays) in (1..=ncal_max).zip(td_cum.iter()) {
         // realized vol (annualized, 365) over TRADING DAYS window
@@ -84,14 +78,16 @@ pub fn vol_factor_table(
     Ok(f_by_day)
 }
 
-pub fn mu_table(ticker: &str, as_of: NaiveDate, clamp: (f64, f64)) -> Result<f64, VolDynamicsError> {
+pub fn mu_table(
+    ticker: &str,
+    as_of: NaiveDate,
+    clamp: (f64, f64),
+) -> Result<f64, VolDynamicsError> {
     // long-horizon trend: fit a single slope on log prices over a 120–250 trading day window
     const MIN_LOOKBACK: usize = 120;
     const MAX_LOOKBACK: usize = 250;
 
-    let md = MarketData::default_read("1d")
-        ?
-        .columns(&[Column::AdjClose]);
+    let md = MarketData::default_read("1d")?.columns(&[Column::AdjClose]);
 
     // fetch enough calendar days to cover the lookback band.
     let lookback_calendar = MAX_LOOKBACK as i64 * 2;
@@ -127,7 +123,6 @@ pub fn mu_table(ticker: &str, as_of: NaiveDate, clamp: (f64, f64)) -> Result<f64
     Ok(slope.clamp(clamp.0, clamp.1))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,7 +136,8 @@ mod tests {
         ensure_market_data_db();
 
         let chain_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(ARM_CHAIN_PATH);
-        let raw_chain = parse_option_chain_file(chain_path).expect("failed to load option chain fixture");
+        let raw_chain =
+            parse_option_chain_file(chain_path).expect("failed to load option chain fixture");
         let chain = OptionChain::from_raw(&raw_chain);
         let surface = VolSurface::new(&chain);
         let calendar = MarketCalendar::new(2024, 2026);
@@ -215,10 +211,7 @@ mod tests {
         // Expected drift from long-horizon log-slope (see src/probability_vol_110.py replacement).
         let expected = -0.040_959_103_675_939_16;
         let diff = (mu - expected).abs();
-        assert!(
-            diff < 1e-12,
-            "expected {expected}, got {mu}, diff {diff}"
-        );
+        assert!(diff < 1e-12, "expected {expected}, got {mu}, diff {diff}");
     }
 
     fn ensure_market_data_db() {

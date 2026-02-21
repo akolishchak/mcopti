@@ -62,10 +62,8 @@ impl Scenario {
         let step_minutes = context.config.step_minutes;
         let days_to_expiry = (expiry_date - start_date).num_days();
         // Approximate step count: intraday bars plus one overnight gap per calendar day.
-        let capacity = (
-            days_to_expiry * context.calendar.max_session_mins()
-            / step_minutes + days_to_expiry
-        ) as usize;
+        let capacity = (days_to_expiry * context.calendar.max_session_mins() / step_minutes
+            + days_to_expiry) as usize;
         let paths = context.config.paths;
         let base_seed = context.config.seed;
 
@@ -370,8 +368,7 @@ mod tests {
         position.push(long, 1);
         let leg_universe = LegUniverse::from_positions(vec![position]);
 
-        let scenario =
-            Scenario::new(&context, &leg_universe).expect("failed to build scenario");
+        let scenario = Scenario::new(&context, &leg_universe).expect("failed to build scenario");
         let steps = scenario.dt_years.len();
         let paths = context.config.paths;
 

@@ -1,39 +1,39 @@
 //! Crate entry points and public re-exports for option simulation.
 
-pub mod pchip;
-pub mod raw_option_chain;
-pub mod option_chain;
-pub mod volsurface;
+pub mod config;
+pub mod context;
+pub mod entry_barriers;
+pub mod historical_volatility;
+pub mod leg;
+pub mod leg_universe;
 pub mod market_calendar;
 pub mod market_data;
-pub mod historical_volatility;
+pub mod option_chain;
 pub mod option_math;
-pub mod vol_dynamics;
-pub mod context;
-pub mod leg;
+pub mod pchip;
 pub mod position;
-pub mod leg_universe;
+pub mod raw_option_chain;
 pub mod scenario;
 pub mod simulator;
-pub mod entry_barriers;
-pub mod config;
+pub mod vol_dynamics;
+pub mod volsurface;
 
 pub use {
-    raw_option_chain::{RawOptionChain, OptionType},
-    option_chain::{OptionChain, OptionChainSide},
-    volsurface::{VolSurface, interp_linear_kgrid, linspace_vec},
-    pchip::Pchip,
-    market_calendar::MarketCalendar,
-    market_data::{MarketData, Column, IngestError},
-    historical_volatility::{HistoricalVolatility, HistoricalVolatilityError},
-    option_math::{ncdf, bs_price, simulate_paths},
-    vol_dynamics::{vol_factor_table, mu_table, VolDynamicsError},
+    config::{Config, DEFAULT_CONFIG},
     context::Context,
-    leg::Leg,
-    position::Position,
+    entry_barriers::EntryBarriers,
+    historical_volatility::{HistoricalVolatility, HistoricalVolatilityError},
+    leg::{Leg, LegBuilder, LegBuilderError},
     leg_universe::LegUniverse,
+    market_calendar::MarketCalendar,
+    market_data::{Column, IngestError, MarketData},
+    option_chain::{OptionChain, OptionChainSide},
+    option_math::{bs_price, ncdf, simulate_paths},
+    pchip::Pchip,
+    position::Position,
+    raw_option_chain::{OptionType, RawOptionChain},
     scenario::{Scenario, ScenarioError},
     simulator::{Simulator, SimulatorError},
-    entry_barriers::EntryBarriers,
-    config::{Config, DEFAULT_CONFIG},
+    vol_dynamics::{VolDynamicsError, mu_table, vol_factor_table},
+    volsurface::{VolSurface, interp_linear_kgrid, linspace_vec},
 };

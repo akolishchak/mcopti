@@ -1,6 +1,8 @@
 //! Price legs and positions along simulated scenario paths.
 
-use crate::{Context, LegUniverse, OptionType, Scenario, bs_price, interp_linear_kgrid, linspace_vec};
+use crate::{
+    Context, LegUniverse, OptionType, Scenario, bs_price, interp_linear_kgrid, linspace_vec,
+};
 use rayon::prelude::*;
 use std::borrow::Cow;
 use std::{error::Error, fmt};
@@ -79,9 +81,7 @@ impl PathAcc {
 }
 
 impl Simulator {
-
     pub fn new() -> Self {
-
         let exit_grid = linspace_vec(0.1, 1.0, 10);
         Self {
             exit_grid,
@@ -137,7 +137,9 @@ impl Simulator {
         }
         let row_stride = vol_surface.row_len();
         if row_stride == 0 {
-            return Err(SimulatorError::InvalidInput("vol surface row length is zero"));
+            return Err(SimulatorError::InvalidInput(
+                "vol surface row length is zero",
+            ));
         }
 
         // walk expiries in order so we can align each slice to the common tau grid and reuse precomputed rows.
@@ -151,7 +153,8 @@ impl Simulator {
                 })?;
             let (_, leg_close) = calendar.session(first_leg.expire);
             // Align this expiry's timeline with the global driver so tau hits zero when the slice expires.
-            let tau_offset = ((max_expiry_close - leg_close).as_seconds_f64() / SECONDS_PER_YEAR).max(0.0);
+            let tau_offset =
+                ((max_expiry_close - leg_close).as_seconds_f64() / SECONDS_PER_YEAR).max(0.0);
             let legs_in_expiry = expire_slice.legs.len();
             let step_stride = legs_in_expiry * row_stride;
 
@@ -170,19 +173,18 @@ impl Simulator {
                 let scale = iv_mult * iv_mult;
                 // Cache per-step rows to avoid re-reading the surface when multiple legs share type.
                 let mut row_call: Option<Cow<'_, [f64]>> = None;
-                let mut row_put:  Option<Cow<'_, [f64]>> = None;
+                let mut row_put: Option<Cow<'_, [f64]>> = None;
 
                 // Build leg-major row blocks to keep indexing cheap in inner loop.
                 for leg in expire_slice.legs.iter() {
                     let src: &[f64] = match leg.option_type {
-                        OptionType::Call => row_call.get_or_insert_with(|| vol_surface.row(OptionType::Call, tau_to_expire)),
-                        OptionType::Put  => row_put .get_or_insert_with(|| vol_surface.row(OptionType::Put,  tau_to_expire)),
+                        OptionType::Call => row_call.get_or_insert_with(|| {
+                            vol_surface.row(OptionType::Call, tau_to_expire)
+                        }),
+                        OptionType::Put => row_put
+                            .get_or_insert_with(|| vol_surface.row(OptionType::Put, tau_to_expire)),
                     };
-                    rows.extend(
-                        src
-                        .iter()
-                        .map(|&w| w * scale),
-                    );
+                    rows.extend(src.iter().map(|&w| w * scale));
                 }
                 taus.push(tau_to_expire);
             }
@@ -218,16 +220,17 @@ impl Simulator {
                             //
                             // track the absolute leg offset; expiry_slices() yields legs in the same stable order as universe.legs.
                             let mut leg_idx = 0;
-                            for (expire_slice, expiry_data) in universe
-                                .expiry_slices()
-                                .zip(expiry_data.iter())
+                            for (expire_slice, expiry_data) in
+                                universe.expiry_slices().zip(expiry_data.iter())
                             {
                                 let steps_to_expiry = expiry_data.taus.len();
                                 if step < steps_to_expiry {
                                     let tau = expiry_data.taus[step];
                                     let step_base = step * expiry_data.step_stride;
-                                    let rows = &expiry_data.rows[step_base..step_base + expiry_data.step_stride];
-                                    for (slice_leg_idx, leg) in expire_slice.legs.iter().enumerate() {
+                                    let rows = &expiry_data.rows
+                                        [step_base..step_base + expiry_data.step_stride];
+                                    for (slice_leg_idx, leg) in expire_slice.legs.iter().enumerate()
+                                    {
                                         let offset = slice_leg_idx * row_stride;
                                         let w_row = &rows[offset..offset + row_stride];
                                         // log-moneyness drives the vol-surface lookup.
@@ -236,7 +239,8 @@ impl Simulator {
                                         let w = interp_linear_kgrid(k, w_row);
                                         let iv = (w / tau).sqrt();
                                         // mark-to-market the leg using slice-specific rows and path price.
-                                        leg_marks[leg_idx] = bs_price(leg.option_type, s, leg.strike, tau, iv);
+                                        leg_marks[leg_idx] =
+                                            bs_price(leg.option_type, s, leg.strike, tau, iv);
 
                                         // safe to advance: each slice covers a disjoint, ordered range of legs.
                                         leg_idx += 1;
@@ -378,8 +382,7 @@ mod tests {
         put_spread.push(long_put, 1);
 
         let universe = LegUniverse::from_positions(vec![call_spread, put_spread]);
-        let scenario = Scenario::new(&context, &universe)
-            .expect("failed to build scenario");
+        let scenario = Scenario::new(&context, &universe).expect("failed to build scenario");
         let metrics = Simulator::new()
             .run(&context, &universe, &scenario)
             .expect("simulation returned no metrics");

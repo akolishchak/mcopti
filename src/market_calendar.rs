@@ -21,20 +21,20 @@ impl USMarketCalendar {
             let thanksgiving = Self::nth_weekday(year, 11, 3, 4);
             holidays.push(vec![
                 Self::observed(NaiveDate::from_ymd_opt(year, 1, 1).unwrap()), // New Year
-                Self::nth_weekday(year, 1, 0, 3), // MLK (3rd Mon Jan)
+                Self::nth_weekday(year, 1, 0, 3),                             // MLK (3rd Mon Jan)
                 Self::nth_weekday(year, 2, 0, 3), // Presidents (3rd Mon Feb)
                 Self::easter(year) - Duration::days(2), // Good Friday
-                Self::last_weekday(year, 5, 0), // Memorial (last Mon May)
+                Self::last_weekday(year, 5, 0),   // Memorial (last Mon May)
                 Self::observed(NaiveDate::from_ymd_opt(year, 6, 19).unwrap()), // Juneteenth
                 Self::observed(NaiveDate::from_ymd_opt(year, 7, 4).unwrap()), // Independence
                 Self::nth_weekday(year, 9, 0, 1), // Labor (1st Mon Sep)
-                thanksgiving, // Thanksgiving (Thu)
+                thanksgiving,                     // Thanksgiving (Thu)
                 Self::observed(NaiveDate::from_ymd_opt(year, 12, 25).unwrap()), // Christmas
             ]);
             yearly_closes.push(vec![
-                thanksgiving + Duration::days(1), // Black Friday
+                thanksgiving + Duration::days(1),               // Black Friday
                 NaiveDate::from_ymd_opt(year, 12, 24).unwrap(), // Christmas Eve
-            ]); 
+            ]);
         }
         Self {
             start_year,
@@ -92,16 +92,17 @@ impl USMarketCalendar {
     pub fn session(&self, date: NaiveDate) -> (DateTime<Tz>, DateTime<Tz>) {
         let open_dt_local = date.and_time(chrono::NaiveTime::from_hms_opt(9, 30, 0).unwrap());
         let open_dt = New_York.from_local_datetime(&open_dt_local).unwrap();
-        let close_dt = open_dt + if self.is_closing_day(date) {
-            Duration::minutes(3*60+30) // 1:00 PM
-        } else {
-            Duration::minutes(6*60+30) // 4:00 PM
-        };
+        let close_dt = open_dt
+            + if self.is_closing_day(date) {
+                Duration::minutes(3 * 60 + 30) // 1:00 PM
+            } else {
+                Duration::minutes(6 * 60 + 30) // 4:00 PM
+            };
         (open_dt, close_dt)
     }
 
     pub fn max_session_mins(&self) -> i64 {
-        6*60+30
+        6 * 60 + 30
     }
 
     fn observed(date: NaiveDate) -> NaiveDate {
@@ -224,11 +225,20 @@ mod tests {
         let cal = USMarketCalendar::new(2025, 2025);
 
         let (open_regular, close_regular) = cal.session(d("2025-06-03"));
-        assert_eq!(open_regular.time(), NaiveTime::from_hms_opt(9, 30, 0).unwrap());
-        assert_eq!(close_regular.time(), NaiveTime::from_hms_opt(16, 0, 0).unwrap());
+        assert_eq!(
+            open_regular.time(),
+            NaiveTime::from_hms_opt(9, 30, 0).unwrap()
+        );
+        assert_eq!(
+            close_regular.time(),
+            NaiveTime::from_hms_opt(16, 0, 0).unwrap()
+        );
 
         let (_open_early, close_early) = cal.session(d("2025-11-28"));
-        assert_eq!(close_early.time(), NaiveTime::from_hms_opt(13, 0, 0).unwrap());
+        assert_eq!(
+            close_early.time(),
+            NaiveTime::from_hms_opt(13, 0, 0).unwrap()
+        );
     }
 
     #[test]
@@ -236,21 +246,15 @@ mod tests {
         let cal = USMarketCalendar::new(2025, 2025);
 
         // Holiday should roll back to the previous trading day (Fri before MLK).
-        let mlk = New_York
-            .with_ymd_and_hms(2025, 1, 20, 12, 0, 0)
-            .unwrap();
+        let mlk = New_York.with_ymd_and_hms(2025, 1, 20, 12, 0, 0).unwrap();
         assert_eq!(cal.latest_trade_date(mlk), d("2025-01-17"));
 
         // After the close on a regular trading day should return the same date.
-        let after_close = New_York
-            .with_ymd_and_hms(2025, 6, 3, 17, 0, 0)
-            .unwrap();
+        let after_close = New_York.with_ymd_and_hms(2025, 6, 3, 17, 0, 0).unwrap();
         assert_eq!(cal.latest_trade_date(after_close), d("2025-06-03"));
 
         // Before the open should roll back to the previous trading day.
-        let pre_open = New_York
-            .with_ymd_and_hms(2025, 6, 3, 8, 0, 0)
-            .unwrap();
+        let pre_open = New_York.with_ymd_and_hms(2025, 6, 3, 8, 0, 0).unwrap();
         assert_eq!(cal.latest_trade_date(pre_open), d("2025-06-02"));
     }
 
@@ -262,7 +266,7 @@ mod tests {
         assert!(!cal.is_trading_day(d("2025-01-18"))); // Sat
         assert!(!cal.is_trading_day(d("2025-01-19"))); // Sun
         assert!(!cal.is_trading_day(d("2025-01-20"))); // MLK
-        assert!(cal.is_trading_day(d("2025-01-21")));  // Tue after MLK
+        assert!(cal.is_trading_day(d("2025-01-21"))); // Tue after MLK
 
         // navigation skips weekend + holiday
         assert_eq!(cal.next_trading_day(d("2025-01-17")), d("2025-01-21"));

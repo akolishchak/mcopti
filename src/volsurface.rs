@@ -15,7 +15,7 @@ const TAU_LUT_SIZE: usize = 1024;
 // Enforce monotone total variance in tau to avoid negative forward variance.
 const TAU_MONO_MODE: TauMonoMode = TauMonoMode::Taper;
 const TAU_NODE_ATOL: f64 = 1e-10;
-const TAU_TAPER_WINDOW: f64 = 24.0 / (24.0 * 365.0);  // ~24 hours in year fraction
+const TAU_TAPER_WINDOW: f64 = 24.0 / (24.0 * 365.0); // ~24 hours in year fraction
 
 const K_GRID: [f64; K_N] = linspace_array::<K_N>(K_MIN, K_MAX);
 const K_GRID_STEP: f64 = linspace_step(K_N, K_MIN, K_MAX);
@@ -24,9 +24,9 @@ enum TauMonoMode {
     #[allow(dead_code)]
     None,
     Taper,
-     #[allow(dead_code)]
+    #[allow(dead_code)]
     Soft,
-     #[allow(dead_code)]
+    #[allow(dead_code)]
     Hard,
 }
 
@@ -44,11 +44,7 @@ impl VolSurface {
         let calls = TauLut::from_side(&option_chain.calls);
         let puts = TauLut::from_side(&option_chain.puts);
 
-        Self {
-            spot,
-            calls,
-            puts,
-        }
+        Self { spot, calls, puts }
     }
 
     pub fn row_len(&self) -> usize {
@@ -101,7 +97,8 @@ impl VolSurface {
         // Within range: linear interp on LUT between nearest grid points
         // This avoids per-query PCHIP and uses the precomputed tau grid.
         //
-        let tau_grid_pos = (tau - lut.tmin) * (TAU_LUT_SIZE as f64 - 1.0) / (lut.tmax - lut.tmin).max(EPSILON);
+        let tau_grid_pos =
+            (tau - lut.tmin) * (TAU_LUT_SIZE as f64 - 1.0) / (lut.tmax - lut.tmin).max(EPSILON);
         // position in tau LUT grid
         let i0 = tau_grid_pos.floor() as usize;
         let i1 = (i0 + 1).min(TAU_LUT_SIZE - 1);
@@ -112,7 +109,8 @@ impl VolSurface {
         let raw1 = &lut.w_raw_lut[i1 * K_N..(i1 + 1) * K_N];
 
         if matches!(TAU_MONO_MODE, TauMonoMode::None) {
-            let w_raw: Vec<_> = raw0.iter()
+            let w_raw: Vec<_> = raw0
+                .iter()
                 .zip(raw1.iter())
                 .map(|(&v0, &v1)| one_minus_alpha * v0 + alpha * v1)
                 .collect();
@@ -130,7 +128,8 @@ impl VolSurface {
 
         // evaluate Wm at tau by LUT
         // Blend raw/monotone by phi and floor to EPSILON.
-        let w_tapered: Vec<_> = raw0.iter()
+        let w_tapered: Vec<_> = raw0
+            .iter()
             .zip(raw1.iter())
             .zip(mon0.iter().zip(mon1.iter()))
             .map(|((&r0, &r1), (&m0, &m1))| {
@@ -139,7 +138,7 @@ impl VolSurface {
                 (w_r + phi * (w_m - w_r)).max(EPSILON)
             })
             .collect();
-        
+
         w_tapered.into()
     }
 
@@ -163,7 +162,6 @@ impl VolSurface {
         // dσ/dk from w = σ^2 * tau => dw/dk = 2σ tau dσ/dk.
         dw_val / (2.0 * sigma * tau)
     }
-
 }
 
 struct TauLut {
@@ -201,13 +199,16 @@ impl TauLut {
         self.w_raw.reserve(n_tau * k_n);
         // Each expiry bucket: fit PCHIP in k and sample onto a fixed k-grid.
         for bucket in side.slices() {
-            let w: Vec<_> = bucket.iv.iter()
+            let w: Vec<_> = bucket
+                .iv
+                .iter()
                 .map(|&iv_i| iv_i * iv_i * bucket.tau)
                 .collect();
-            let pchip = Pchip::new(bucket.k, w.as_slice())
-                .expect("Failed to create PCHIP interpolant");
+            let pchip =
+                Pchip::new(bucket.k, w.as_slice()).expect("Failed to create PCHIP interpolant");
 
-            self.w_raw.extend(K_GRID.iter().map(|&k| pchip.eval(k).max(EPSILON)));
+            self.w_raw
+                .extend(K_GRID.iter().map(|&k| pchip.eval(k).max(EPSILON)));
         }
 
         // Turn W_raw into column-major (transpose) for per-strike monotonic enforcement.
@@ -240,7 +241,6 @@ impl TauLut {
         // [TAU_LUT_SIZE * K_N] row-major for fast row access
         self.w_raw_lut = self.to_lut(&w_raw_t, (k_n, n_tau), tau_grid.as_slice());
         self.w_mon_lut = self.to_lut(self.w_mon.as_slice(), (k_n, n_tau), tau_grid.as_slice());
-        
     }
 
     /// Create a lookup table by evaluating PCHIP interpolants at given tau_grid.
@@ -275,7 +275,7 @@ pub fn interp_linear_kgrid(x: f64, fp: &[f64]) -> f64 {
 fn interp_linear(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
     let n = xp.len();
     assert!(n >= 2, "xp must have at least two points");
-    
+
     let high = match xp.binary_search_by(|v| v.total_cmp(&x)) {
         Ok(i) => i,
         Err(i) => i.min(n - 1),
@@ -301,7 +301,7 @@ fn gradient_uniform(f: &[f64], h: f64) -> Vec<f64> {
             grad.push((w[2] - w[0]) * inv_2h);
         }
     }
-    grad.push((f[n-1] - f[n-2]) / h);
+    grad.push((f[n - 1] - f[n - 2]) / h);
     grad
 }
 
@@ -386,8 +386,18 @@ mod tests {
                 tau_from(&chain, 2025, 11, 21),
                 -0.205_017_703_325_62_f64,
             ),
-            (OptionType::Call, 150.0_f64, 0.25_f64, -0.070_338_261_531_257_f64),
-            (OptionType::Put, 110.0_f64, 0.75_f64, -0.020_314_541_565_288_f64),
+            (
+                OptionType::Call,
+                150.0_f64,
+                0.25_f64,
+                -0.070_338_261_531_257_f64,
+            ),
+            (
+                OptionType::Put,
+                110.0_f64,
+                0.75_f64,
+                -0.020_314_541_565_288_f64,
+            ),
         ];
 
         let mut failures = Vec::new();
@@ -413,9 +423,24 @@ mod tests {
         let surface = build_surface(&chain);
 
         let cases = [
-            (OptionType::Call, 140.0, tau_from(&chain, 2025, 10, 17), 0.439_831_972_631_664_07_f64),
-            (OptionType::Put, 120.0, tau_from(&chain, 2025, 11, 21), 0.519_075_134_542_538_2_f64),
-            (OptionType::Call, 150.0, 0.25_f64, 0.478_973_206_992_695_74_f64),
+            (
+                OptionType::Call,
+                140.0,
+                tau_from(&chain, 2025, 10, 17),
+                0.439_831_972_631_664_07_f64,
+            ),
+            (
+                OptionType::Put,
+                120.0,
+                tau_from(&chain, 2025, 11, 21),
+                0.519_075_134_542_538_2_f64,
+            ),
+            (
+                OptionType::Call,
+                150.0,
+                0.25_f64,
+                0.478_973_206_992_695_74_f64,
+            ),
         ];
 
         let mut failures = Vec::new();

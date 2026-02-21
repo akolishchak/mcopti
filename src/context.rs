@@ -1,8 +1,7 @@
 //! Bundle option chain data, vol surface, calendar, and config for simulation.
 
+use crate::{Config, DEFAULT_CONFIG, MarketCalendar, OptionChain, RawOptionChain, VolSurface};
 use chrono::Datelike;
-use crate::{Config, DEFAULT_CONFIG, OptionChain, RawOptionChain, MarketCalendar, VolSurface};
-
 
 pub struct Context {
     pub ticker: String,
@@ -17,7 +16,7 @@ impl Context {
         let option_chain = OptionChain::from_raw(raw_option_chain);
         let vol_surface = VolSurface::new(&option_chain);
         let year = raw_option_chain.date.year();
-        let calendar = MarketCalendar::new(year, year+1);
+        let calendar = MarketCalendar::new(year, year + 1);
 
         Self {
             ticker: ticker.to_string(),
@@ -27,6 +26,4 @@ impl Context {
             config: DEFAULT_CONFIG,
         }
     }
-
-    
 }

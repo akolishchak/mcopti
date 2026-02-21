@@ -55,16 +55,8 @@ impl EntryBarriers {
         let mark_win = premium * (1.0 + profit_take.max(0.0) * side);
         let mark_loss = premium * (1.0 - stop_loss.max(0.0) * side);
 
-        let s_win = Self::find_s_for_mark(
-            |s| Self::mark_at_spot(&leg_inputs, s),
-            mark_win,
-            s0,
-        );
-        let s_loss = Self::find_s_for_mark(
-            |s| Self::mark_at_spot(&leg_inputs, s),
-            mark_loss,
-            s0,
-        );
+        let s_win = Self::find_s_for_mark(|s| Self::mark_at_spot(&leg_inputs, s), mark_win, s0);
+        let s_loss = Self::find_s_for_mark(|s| Self::mark_at_spot(&leg_inputs, s), mark_loss, s0);
 
         // Compute sigT to this position's expiry inside the global (universe-max) scenario.
         // Same alignment idea as simulator: tau_to_pos = tau_max - tau_offset, where
@@ -121,7 +113,8 @@ impl EntryBarriers {
             .iter()
             .map(|(leg, qty)| {
                 let (_, leg_close) = context.calendar.session(leg.expire);
-                let tau = ((leg_close - as_of_close).as_seconds_f64() / SECONDS_PER_YEAR).max(EPSILON);
+                let tau =
+                    ((leg_close - as_of_close).as_seconds_f64() / SECONDS_PER_YEAR).max(EPSILON);
                 LegEvalInput {
                     option_type: leg.option_type,
                     strike: leg.strike,
@@ -247,7 +240,7 @@ impl EntryBarriers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{leg::LegBuilder, raw_option_chain::parse_option_chain_file, LegUniverse};
+    use crate::{LegUniverse, leg::LegBuilder, raw_option_chain::parse_option_chain_file};
     use chrono::NaiveDate;
     use std::fs;
     use std::path::PathBuf;
@@ -294,12 +287,8 @@ mod tests {
 
     #[test]
     fn find_s_for_mark_picks_closest_root_for_non_monotone_function() {
-        let root = EntryBarriers::find_s_for_mark(
-            |s| (s - 80.0) * (s - 120.0),
-            0.0,
-            95.0,
-        )
-        .expect("expected a root");
+        let root = EntryBarriers::find_s_for_mark(|s| (s - 80.0) * (s - 120.0), 0.0, 95.0)
+            .expect("expected a root");
 
         assert!(
             approx_eq(root, 80.0, 1e-3),
@@ -399,5 +388,4 @@ mod tests {
             fs::copy(&fixture_db, &local_db).expect("failed to copy fixture market data db");
         }
     }
-
 }

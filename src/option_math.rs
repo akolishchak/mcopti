@@ -1,7 +1,7 @@
 //! Option math helpers including NCDF, Black-Scholes, and path simulation.
 
 use crate::OptionType;
-use rand::{SeedableRng, Rng};
+use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 use rand_xoshiro::Xoshiro256PlusPlus;
 
@@ -10,7 +10,7 @@ pub fn erf(x: f64) -> f64 {
     let sign = if x < 0.0 { -1.0 } else { 1.0 };
     let ax = x.abs();
 
-    let p  = 0.3275911;
+    let p = 0.3275911;
     let a1 = 0.254829592;
     let a2 = -0.284496736;
     let a3 = 1.421413741;
@@ -41,7 +41,13 @@ pub fn bs_price(option_type: OptionType, s: f64, k: f64, t: f64, sigma: f64) -> 
     }
 }
 
-pub fn simulate_paths(s0: f64, drift: &[f64], volatility: &[f64], paths: usize, seed: Option<u64>) -> Vec<f64> {
+pub fn simulate_paths(
+    s0: f64,
+    drift: &[f64],
+    volatility: &[f64],
+    paths: usize,
+    seed: Option<u64>,
+) -> Vec<f64> {
     assert_eq!(drift.len(), volatility.len());
 
     let steps = drift.len();
@@ -97,8 +103,22 @@ mod tests {
     #[test]
     fn bs_price_prob_vol_reference() {
         let cases = [
-            (OptionType::Call, 100.0, 105.0, 0.5, 0.2, 3.617_973_846_316_467),
-            (OptionType::Put, 50.0, 45.0, 1.2, 0.35, 4.988_532_982_757_931),
+            (
+                OptionType::Call,
+                100.0,
+                105.0,
+                0.5,
+                0.2,
+                3.617_973_846_316_467,
+            ),
+            (
+                OptionType::Put,
+                50.0,
+                45.0,
+                1.2,
+                0.35,
+                4.988_532_982_757_931,
+            ),
             (
                 OptionType::Call,
                 1.0,

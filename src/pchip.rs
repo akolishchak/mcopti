@@ -1,6 +1,6 @@
 //! Monotone PCHIP interpolation for shape-preserving curves.
 
-use std::{error::Error, fmt, borrow::Cow};
+use std::{borrow::Cow, error::Error, fmt};
 
 /// Piecewise Cubic Hermite Interpolating Polynomial preserving monotonicity.
 #[derive(Clone, Debug)]
@@ -31,7 +31,7 @@ impl Error for PchipError {}
 
 impl<'a> Pchip<'a> {
     /// Build a monotone shape-preserving cubic interpolant.
-    pub fn new<T>(x: T, y: T) -> Result<Self, PchipError> 
+    pub fn new<T>(x: T, y: T) -> Result<Self, PchipError>
     where
         T: Into<Cow<'a, [f64]>>,
     {

@@ -9,7 +9,6 @@ use std::error::Error as StdError;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
-
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Column {
@@ -39,17 +38,38 @@ pub enum Column {
     IvTrend20,
     IvRank6,
     IvRank9,
-    IvRank12
+    IvRank12,
 }
 
 const COLUMN_COUNT: usize = 27;
 const COLUMN_NAMES: [&str; COLUMN_COUNT] = [
-    "open", "high", "low", "close", "volume",
-    "adjopen", "adjhigh", "adjlow", "adjclose",
-    "co_log", "oc_log", "cc_log", "co_log_adj", "oc_log_adj", "cc_log_adj",
-    "vol20", "vol20_adj", "vol_trend20", "adjclose_trend20",
-    "vol_rank6", "vol_rank9", "vol_rank12",
-    "iv", "iv_trend20", "iv_rank6", "iv_rank9", "iv_rank12",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "adjopen",
+    "adjhigh",
+    "adjlow",
+    "adjclose",
+    "co_log",
+    "oc_log",
+    "cc_log",
+    "co_log_adj",
+    "oc_log_adj",
+    "cc_log_adj",
+    "vol20",
+    "vol20_adj",
+    "vol_trend20",
+    "adjclose_trend20",
+    "vol_rank6",
+    "vol_rank9",
+    "vol_rank12",
+    "iv",
+    "iv_trend20",
+    "iv_rank6",
+    "iv_rank9",
+    "iv_rank12",
 ];
 
 const COLUMN_NAMES_ALL: &str = "open, high, low, close, volume,
@@ -63,11 +83,19 @@ const PCT6: usize = 126;
 const PCT9: usize = 189;
 const PCT12: usize = 252;
 
-
 impl Column {
-    #[inline] pub fn idx(self) -> usize { self as usize }
-    #[inline] pub fn name(self) -> &'static str { COLUMN_NAMES[self.idx()] }
-    #[inline] pub fn all() -> &'static str { COLUMN_NAMES_ALL }
+    #[inline]
+    pub fn idx(self) -> usize {
+        self as usize
+    }
+    #[inline]
+    pub fn name(self) -> &'static str {
+        COLUMN_NAMES[self.idx()]
+    }
+    #[inline]
+    pub fn all() -> &'static str {
+        COLUMN_NAMES_ALL
+    }
 }
 
 pub enum DbMode {
@@ -140,17 +168,20 @@ impl MarketData {
 
                 let conn = Connection::open_with_flags(uri, flags)?;
 
-                conn.execute_batch(r#"
+                conn.execute_batch(
+                    r#"
                     PRAGMA query_only=ON;
                     PRAGMA mmap_size=536870912;     -- 512MB (>= DB size)
                     PRAGMA cache_size=-65536;       -- ~64MB (raise to -131072 if few conns)
                     PRAGMA temp_store=MEMORY;
-                "#)?;
+                "#,
+                )?;
                 conn
-            },
+            }
             DbMode::Write => {
                 let conn = Connection::open(path)?;
-                conn.execute_batch(r#"
+                conn.execute_batch(
+                    r#"
                     PRAGMA journal_mode=WAL;
                     PRAGMA synchronous=NORMAL;
                     PRAGMA wal_autocheckpoint=0;
@@ -189,7 +220,8 @@ impl MarketData {
                         iv_rank12 REAL,
                         PRIMARY KEY (ticker, timestamp)
                     );
-                "#)?;
+                "#,
+                )?;
                 conn
             }
         };
@@ -212,9 +244,11 @@ impl MarketData {
     }
 
     pub fn columns(mut self, columns: &[Column]) -> Self {
-        let mut columns_str = String::with_capacity(columns.len()*12);
+        let mut columns_str = String::with_capacity(columns.len() * 12);
         for (i, c) in columns.iter().enumerate() {
-            if i > 0 { columns_str.push(','); }
+            if i > 0 {
+                columns_str.push(',');
+            }
             columns_str.push('"');
             columns_str.push_str(c.name());
             columns_str.push('"');
@@ -223,24 +257,23 @@ impl MarketData {
         self
     }
 
-    pub fn fetch(&self, ticker: &str, start: NaiveDate, end: NaiveDate) -> Result<Vec<(DateTime<Utc>, Vec<f64>)>> {
+    pub fn fetch(
+        &self,
+        ticker: &str,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> Result<Vec<(DateTime<Utc>, Vec<f64>)>> {
         let columns = self.columns.as_deref().unwrap_or(Column::all());
-        let sql = format!("SELECT timestamp, {columns}
+        let sql = format!(
+            "SELECT timestamp, {columns}
             FROM candles
             WHERE ticker=?1 AND timestamp >= ?2 AND timestamp < ?3
-            ORDER BY timestamp");
+            ORDER BY timestamp"
+        );
         let mut stmt = self.connection.prepare_cached(&sql)?;
 
-        let start_ts = start
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc()
-            .timestamp();
-        let end_ts = end
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc()
-            .timestamp() + self.period_step;
+        let start_ts = start.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp();
+        let end_ts = end.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp() + self.period_step;
 
         stmt.query_map(params![ticker, start_ts, end_ts], |row| {
             let ts: i64 = row.get(0)?;
@@ -265,16 +298,8 @@ impl MarketData {
         end: NaiveDate,
     ) -> std::result::Result<(), IngestError> {
         let step = Self::resolution_steps(resolution);
-        let start_ts = start
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc()
-            .timestamp();
-        let end_ts_exclusive = end
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc()
-            .timestamp() + step;
+        let start_ts = start.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp();
+        let end_ts_exclusive = end.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp() + step;
 
         if end_ts_exclusive <= start_ts {
             return Ok(());
@@ -288,7 +313,9 @@ impl MarketData {
         let mut body = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(15))
             .build()
-            .get(&format!("https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"))
+            .get(&format!(
+                "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+            ))
             .query("period1", &period1.to_string())
             .query("period2", &end_ts_exclusive.to_string())
             .query("interval", resolution)
@@ -506,13 +533,15 @@ impl MarketData {
             };
         }
 
-        let (mut prior_cc, mut prior_cc_adj) = self.get_prior_cc_logs(ticker, first_ts, (VOL_WINDOW - 1) as i64)?;
+        let (mut prior_cc, mut prior_cc_adj) =
+            self.get_prior_cc_logs(ticker, first_ts, (VOL_WINDOW - 1) as i64)?;
         let prior_cc_len = prior_cc.len();
         let prior_cc_adj_len = prior_cc_adj.len();
         prior_cc.extend_from_slice(&derived.cc_log);
         prior_cc_adj.extend_from_slice(&derived.cc_log_adj);
         derived.vol20 = Self::rolling_annvol_from_cc(&prior_cc, prior_cc_len, VOL_WINDOW);
-        derived.vol20_adj = Self::rolling_annvol_from_cc(&prior_cc_adj, prior_cc_adj_len, VOL_WINDOW);
+        derived.vol20_adj =
+            Self::rolling_annvol_from_cc(&prior_cc_adj, prior_cc_adj_len, VOL_WINDOW);
 
         let prior_vol20_adj = self.get_prior_vol20_adj(ticker, first_ts, PCT12 as i64)?;
         let mut pct6 = PercentileWindow::from_seed(PCT6, &prior_vol20_adj);
@@ -529,7 +558,8 @@ impl MarketData {
             }
         }
 
-        let prior_vol_base = self.get_prior_voltrend_base(ticker, first_ts, (VOL_WINDOW - 1) as i64)?;
+        let prior_vol_base =
+            self.get_prior_voltrend_base(ticker, first_ts, (VOL_WINDOW - 1) as i64)?;
         let prior_vol_len = prior_vol_base.len();
         let mut combined_vol = prior_vol_base;
         combined_vol.reserve(n);
@@ -541,7 +571,8 @@ impl MarketData {
             derived.vol_trend20[i] = vol_trend[prior_vol_len + i];
         }
 
-        let prior_adj_base = self.get_prior_adjclose_values(ticker, first_ts, (VOL_WINDOW - 1) as i64)?;
+        let prior_adj_base =
+            self.get_prior_adjclose_values(ticker, first_ts, (VOL_WINDOW - 1) as i64)?;
         let prior_adj_len = prior_adj_base.len();
         let mut combined_adj = prior_adj_base;
         combined_adj.reserve(n);
@@ -556,12 +587,16 @@ impl MarketData {
         Ok(derived)
     }
 
-    fn get_prev_close_adj(&self, ticker: &str, first_ts: i64) -> Result<(Option<f64>, Option<f64>)> {
+    fn get_prev_close_adj(
+        &self,
+        ticker: &str,
+        first_ts: i64,
+    ) -> Result<(Option<f64>, Option<f64>)> {
         let mut stmt = self.connection.prepare_cached(
             "SELECT close, adjclose
             FROM candles
             WHERE ticker=?1 AND timestamp < ?2
-            ORDER BY timestamp DESC LIMIT 1"
+            ORDER BY timestamp DESC LIMIT 1",
         )?;
         let mut rows = stmt.query(params![ticker, first_ts])?;
         if let Some(row) = rows.next()? {
@@ -581,15 +616,12 @@ impl MarketData {
             "SELECT cc_log, cc_log_adj
             FROM candles
             WHERE ticker=?1 AND timestamp < ?2
-            ORDER BY timestamp DESC LIMIT ?3"
+            ORDER BY timestamp DESC LIMIT ?3",
         )?;
         let mut raw = Vec::new();
         let mut adj = Vec::new();
         let rows = stmt.query_map(params![ticker, first_ts, limit], |row| {
-            Ok((
-                row.get::<_, Option<f64>>(0)?,
-                row.get::<_, Option<f64>>(1)?,
-            ))
+            Ok((row.get::<_, Option<f64>>(0)?, row.get::<_, Option<f64>>(1)?))
         })?;
 
         for row in rows {
@@ -602,12 +634,17 @@ impl MarketData {
         Ok((raw, adj))
     }
 
-    fn get_prior_voltrend_base(&self, ticker: &str, first_ts: i64, limit: i64) -> Result<Vec<Option<f64>>> {
+    fn get_prior_voltrend_base(
+        &self,
+        ticker: &str,
+        first_ts: i64,
+        limit: i64,
+    ) -> Result<Vec<Option<f64>>> {
         let mut stmt = self.connection.prepare_cached(
             "SELECT vol20_adj, vol20
             FROM candles
             WHERE ticker=?1 AND timestamp < ?2
-            ORDER BY timestamp DESC LIMIT ?3"
+            ORDER BY timestamp DESC LIMIT ?3",
         )?;
         let mut values = Vec::new();
         let rows = stmt.query_map(params![ticker, first_ts, limit], |row| {
@@ -621,12 +658,17 @@ impl MarketData {
         Ok(values)
     }
 
-    fn get_prior_adjclose_values(&self, ticker: &str, first_ts: i64, limit: i64) -> Result<Vec<Option<f64>>> {
+    fn get_prior_adjclose_values(
+        &self,
+        ticker: &str,
+        first_ts: i64,
+        limit: i64,
+    ) -> Result<Vec<Option<f64>>> {
         let mut stmt = self.connection.prepare_cached(
             "SELECT adjclose, close
             FROM candles
             WHERE ticker=?1 AND timestamp < ?2
-            ORDER BY timestamp DESC LIMIT ?3"
+            ORDER BY timestamp DESC LIMIT ?3",
         )?;
         let mut values = Vec::new();
         let rows = stmt.query_map(params![ticker, first_ts, limit], |row| {
@@ -645,7 +687,7 @@ impl MarketData {
             "SELECT vol20_adj
             FROM candles
             WHERE ticker=?1 AND timestamp < ?2 AND vol20_adj IS NOT NULL
-            ORDER BY timestamp DESC LIMIT ?3"
+            ORDER BY timestamp DESC LIMIT ?3",
         )?;
         let mut values = Vec::new();
         let rows = stmt.query_map(params![ticker, first_ts, limit], |row| row.get::<_, f64>(0))?;
@@ -801,10 +843,9 @@ impl MarketData {
     fn resolution_steps(resolution: &str) -> i64 {
         match resolution {
             "1d" => 86_400,
-            _ => unimplemented!("{resolution} is not supported")
+            _ => unimplemented!("{resolution} is not supported"),
         }
     }
-
 }
 
 #[derive(Copy, Clone)]
@@ -964,8 +1005,11 @@ mod tests {
 
     #[test]
     fn fetch_subset_columns_returns_rows() -> rusqlite::Result<()> {
-        let md = MarketData::new(FIXTURE_DIR, "1d", DbMode::Read)?
-            .columns(&[Column::Open, Column::Close, Column::Volume]);
+        let md = MarketData::new(FIXTURE_DIR, "1d", DbMode::Read)?.columns(&[
+            Column::Open,
+            Column::Close,
+            Column::Volume,
+        ]);
 
         let start = NaiveDate::from_ymd_opt(2023, 1, 3).unwrap();
         let end = NaiveDate::from_ymd_opt(2023, 1, 5).unwrap();

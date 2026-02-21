@@ -6,7 +6,6 @@ use std::{error::Error, fmt};
 use crate::market_data::DbMode;
 use crate::{Column, MarketData};
 
-
 pub struct HistoricalVolatility {
     returns: Vec<f64>,
 }
@@ -66,17 +65,14 @@ impl HistoricalVolatility {
         let start_dt = as_of - Duration::days(max_lookback_days + 10);
         let data = md
             .columns(&[Column::CoLogAdj, Column::OcLogAdj])
-            .fetch(ticker, start_dt, as_of)
-            ?;
+            .fetch(ticker, start_dt, as_of)?;
         // full daily log returns (close-to-close) = co_log_adj + oc_log_adj
         let returns: Vec<_> = data
             .into_iter()
             .map(|(_, values)| values.into_iter().sum::<f64>())
             .collect();
 
-        Ok(Self {
-            returns,
-        })
+        Ok(Self { returns })
     }
 
     pub fn rv(&self, lookback_days: i64) -> f64 {
@@ -88,13 +84,14 @@ impl HistoricalVolatility {
         // last n returns
         let returns = &self.returns[returns_len.saturating_sub(n)..];
         let mean = returns.iter().sum::<f64>() / n as f64;
-        let sumsq_dev = returns.iter()
+        let sumsq_dev = returns
+            .iter()
             .map(|r| {
                 let dev = r - mean;
-                dev*dev
+                dev * dev
             })
             .sum::<f64>();
-        let divisor = if n > 1 { n - 1} else { n };
+        let divisor = if n > 1 { n - 1 } else { n };
         let var_per_trading_day = sumsq_dev / divisor as f64;
         // sigma_252
         (252.0 * var_per_trading_day).sqrt()

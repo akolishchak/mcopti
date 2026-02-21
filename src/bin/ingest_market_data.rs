@@ -2,9 +2,9 @@ use chrono::{Duration, Months, NaiveDate, Utc};
 use mcopti::MarketData;
 use std::env;
 use std::error::Error;
+use std::fs::read_to_string;
 use std::io::{Error as IoError, ErrorKind};
 use std::time::SystemTime;
-use std::fs::read_to_string;
 
 const DB_PATH: &str = "data/market_data_1d.db";
 
@@ -47,7 +47,9 @@ fn tickers(identifier: &str) -> Result<Vec<String>, IoError> {
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 || args.len() > 4 {
-        eprintln!("Usage: ingest_market_data <ticker|file_name> [start YYYY-MM-DD] [end YYYY-MM-DD]");
+        eprintln!(
+            "Usage: ingest_market_data <ticker|file_name> [start YYYY-MM-DD] [end YYYY-MM-DD]"
+        );
         std::process::exit(2);
     }
 
@@ -75,17 +77,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let tickers_num = tickers.len();
     for ticker in &tickers {
         market_data.ingest(ticker, "1d", start, end)?;
-        println!(
-            "Updated ticker {} ({}..{})",
-            ticker,
-            start,
-            end
-        );
+        println!("Updated ticker {} ({}..{})", ticker, start, end);
     }
-    
+
     if tickers_num > 0 {
         println!("{tickers_num} ticker(s) updated in {DB_PATH}");
     }
-    
+
     Ok(())
 }

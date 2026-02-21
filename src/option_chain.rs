@@ -15,7 +15,11 @@ impl OptionChain {
         let spot = raw_option_chain.last_price;
         let date = raw_option_chain.date;
 
-        let n_calls = raw_option_chain.data.iter().filter(|c| matches!(c.option_type, OptionType::Call)).count();
+        let n_calls = raw_option_chain
+            .data
+            .iter()
+            .filter(|c| matches!(c.option_type, OptionType::Call))
+            .count();
         let n_puts = raw_option_chain.data.len() - n_calls;
 
         let mut calls = OptionChainSide::new(spot, date, n_calls);
@@ -79,14 +83,14 @@ impl OptionChainSide {
         }
     }
 
-    fn push(&mut self,  contract: &OptionContract) {
-
+    fn push(&mut self, contract: &OptionContract) {
         let tau = (contract.expiration - self.date).num_days() as f64 / 365.0;
         let k = (contract.strike / self.spot).ln();
         let iv = contract.implied_volatility;
         let mid = (contract.ask + contract.bid) * 0.5;
 
-        let is_new_expire = self.last_expire
+        let is_new_expire = self
+            .last_expire
             .map_or(true, |last_expire| last_expire != contract.expiration);
 
         if is_new_expire {
@@ -138,12 +142,10 @@ impl OptionChainSide {
                 let id = start + local_id;
                 Some((self.mid[id], self.iv[id]))
             }
-            Err(_) => None
+            Err(_) => None,
         }
     }
-
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -183,25 +185,46 @@ mod tests {
 
     fn assert_close(a: f64, b: f64) {
         let diff = (a - b).abs();
-        assert!(
-            diff < 1e-12,
-            "expected {b}, got {a}, diff {diff}"
-        );
+        assert!(diff < 1e-12, "expected {b}, got {a}, diff {diff}");
     }
 
     #[test]
     fn buckets_contracts_by_expiry_and_exposes_slices() {
         let trade_date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
         let exp_short = NaiveDate::from_ymd_opt(2025, 1, 15).unwrap(); // 14 calendar days
-        let exp_long = NaiveDate::from_ymd_opt(2025, 2, 15).unwrap();  // 45 calendar days
+        let exp_long = NaiveDate::from_ymd_opt(2025, 2, 15).unwrap(); // 45 calendar days
 
         let raw = RawOptionChain {
             date: trade_date,
             last_price: 100.0,
             data: vec![
-                mk_contract(trade_date, exp_short, 100.0, OptionType::Call, 1.0, 1.2, 0.20),
-                mk_contract(trade_date, exp_short, 105.0, OptionType::Call, 1.4, 1.8, 0.22),
-                mk_contract(trade_date, exp_long, 110.0, OptionType::Call, 2.0, 2.6, 0.25),
+                mk_contract(
+                    trade_date,
+                    exp_short,
+                    100.0,
+                    OptionType::Call,
+                    1.0,
+                    1.2,
+                    0.20,
+                ),
+                mk_contract(
+                    trade_date,
+                    exp_short,
+                    105.0,
+                    OptionType::Call,
+                    1.4,
+                    1.8,
+                    0.22,
+                ),
+                mk_contract(
+                    trade_date,
+                    exp_long,
+                    110.0,
+                    OptionType::Call,
+                    2.0,
+                    2.6,
+                    0.25,
+                ),
             ],
         };
 
@@ -240,15 +263,45 @@ mod tests {
             date: trade_date,
             last_price: 100.0,
             data: vec![
-                mk_contract(trade_date, exp_short, 100.0, OptionType::Call, 1.0, 1.2, 0.20),
-                mk_contract(trade_date, exp_short, 105.0, OptionType::Call, 1.4, 1.8, 0.22),
-                mk_contract(trade_date, exp_long, 110.0, OptionType::Call, 2.0, 2.6, 0.25),
+                mk_contract(
+                    trade_date,
+                    exp_short,
+                    100.0,
+                    OptionType::Call,
+                    1.0,
+                    1.2,
+                    0.20,
+                ),
+                mk_contract(
+                    trade_date,
+                    exp_short,
+                    105.0,
+                    OptionType::Call,
+                    1.4,
+                    1.8,
+                    0.22,
+                ),
+                mk_contract(
+                    trade_date,
+                    exp_long,
+                    110.0,
+                    OptionType::Call,
+                    2.0,
+                    2.6,
+                    0.25,
+                ),
             ],
         };
 
         let chain = OptionChain::from_raw(&raw);
-        let exp_id = chain.calls.expire_id(exp_long).expect("missing long expiry");
-        let (mid, iv) = chain.calls.strike(110.0, exp_id).expect("missing strike at long expiry");
+        let exp_id = chain
+            .calls
+            .expire_id(exp_long)
+            .expect("missing long expiry");
+        let (mid, iv) = chain
+            .calls
+            .strike(110.0, exp_id)
+            .expect("missing strike at long expiry");
         assert_close(mid, 2.3);
         assert_close(iv, 0.25);
     }

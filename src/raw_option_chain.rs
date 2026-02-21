@@ -7,7 +7,6 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
-
 /// Root option chain payload.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct RawOptionChain {
@@ -360,8 +359,16 @@ mod tests {
         assert!((chain.last_price - 190.55).abs() < 1e-12);
         assert_eq!(chain.data.len(), 4);
 
-        let calls: Vec<_> = chain.data.iter().filter(|c| c.option_type == OptionType::Call).collect();
-        let puts: Vec<_> = chain.data.iter().filter(|c| c.option_type == OptionType::Put).collect();
+        let calls: Vec<_> = chain
+            .data
+            .iter()
+            .filter(|c| c.option_type == OptionType::Call)
+            .collect();
+        let puts: Vec<_> = chain
+            .data
+            .iter()
+            .filter(|c| c.option_type == OptionType::Put)
+            .collect();
         assert_eq!(calls.len(), 2);
         assert_eq!(puts.len(), 2);
 

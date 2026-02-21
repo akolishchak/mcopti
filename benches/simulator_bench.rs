@@ -1,8 +1,8 @@
 use chrono::NaiveDate;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use mcopti::{
-    Config, Context, DEFAULT_CONFIG, LegUniverse, OptionType, Position, Scenario, leg::LegBuilder,
-    Simulator, raw_option_chain::parse_option_chain_file,
+    Config, Context, DEFAULT_CONFIG, LegUniverse, OptionType, Position, Scenario, Simulator,
+    leg::LegBuilder, raw_option_chain::parse_option_chain_file,
 };
 use std::{
     fs,
@@ -14,19 +14,21 @@ fn bench_simulator_run(c: &mut Criterion) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     ensure_market_data_db(&manifest_dir);
     let (context, universe) = build_case(100_000, &manifest_dir);
-    let scenario = Scenario::new(&context, &universe)
-        .expect("failed to build scenario");
+    let scenario = Scenario::new(&context, &universe).expect("failed to build scenario");
 
     c.bench_function("simulator_run_paths_100k", |b| {
         b.iter(|| {
             let metrics = Simulator::new()
-                .run(black_box(&context), black_box(&universe), black_box(&scenario))
+                .run(
+                    black_box(&context),
+                    black_box(&universe),
+                    black_box(&scenario),
+                )
                 .expect("simulation returned no metrics");
             black_box(metrics);
         });
     });
 }
-
 
 fn build_case(paths: usize, manifest_dir: &Path) -> (Context, LegUniverse) {
     let chain_path = manifest_dir.join("tests/fixtures/ARM_option_chain_20250908_160038.json");

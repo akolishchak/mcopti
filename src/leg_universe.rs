@@ -28,10 +28,7 @@ pub struct LegUniverseExpirySlice<'a> {
 
 impl LegUniverse {
     pub fn from_positions(positions: Vec<Position>) -> Self {
-        let capacity = positions
-            .iter()
-            .map(|p| p.legs.len())
-            .sum();
+        let capacity = positions.iter().map(|p| p.legs.len()).sum();
         let mut legs: Vec<Leg> = Vec::with_capacity(capacity);
         let mut positions_idx = Vec::with_capacity(positions.len());
         let mut max_expire = NaiveDate::MIN;
@@ -55,9 +52,7 @@ impl LegUniverse {
                 .then_with(|| a.strike.total_cmp(&b.strike))
         });
         legs.dedup_by(|a, b| {
-            a.expire_id == b.expire_id
-                && a.option_type == b.option_type
-                && a.strike == b.strike
+            a.expire_id == b.expire_id && a.option_type == b.option_type && a.strike == b.strike
         });
 
         for position in positions.iter() {
@@ -86,7 +81,7 @@ impl LegUniverse {
             };
             if is_new_type {
                 type_range.push((i, i + 1));
-                last_type_range = Some((leg.expire_id, leg.option_type, ));
+                last_type_range = Some((leg.expire_id, leg.option_type));
             } else if let Some(last) = type_range.last_mut() {
                 last.1 = i + 1;
             }
@@ -96,14 +91,14 @@ impl LegUniverse {
                 None => true,
             };
             if is_new_expiry {
-                expiry_range.push((i, i+1));
+                expiry_range.push((i, i + 1));
                 last_expiry_range = Some(leg.expire_id);
             } else if let Some(last) = expiry_range.last_mut() {
                 last.1 = i + 1;
             }
         }
 
-        Self { 
+        Self {
             legs,
             max_expire,
             call_present,
@@ -121,7 +116,7 @@ impl LegUniverse {
             .map(|&(start, end)| LegUniverseTypeSlice {
                 option_type: self.legs[start].option_type,
                 expire_id: self.legs[start].expire_id,
-                legs: &self.legs[start..end]
+                legs: &self.legs[start..end],
             })
     }
 
@@ -130,7 +125,7 @@ impl LegUniverse {
             .iter()
             .map(|&(start, end)| LegUniverseExpirySlice {
                 expire_id: self.legs[start].expire_id,
-                legs: &self.legs[start..end]
+                legs: &self.legs[start..end],
             })
     }
 

@@ -45,7 +45,7 @@ fn build_case(paths: usize, manifest_dir: &Path) -> (Context, LegUniverse) {
         .create(OptionType::Call, 155.0, expiry)
         .expect("missing long leg");
 
-    let mut position = Position::new();
+    let mut position = Position::default();
     position.push(short, -1);
     position.push(long, 1);
     let leg_universe = LegUniverse::from_positions(vec![position]);

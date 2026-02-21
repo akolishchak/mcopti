@@ -18,7 +18,7 @@ fn bench_simulator_run(c: &mut Criterion) {
 
     c.bench_function("simulator_run_paths_100k", |b| {
         b.iter(|| {
-            let metrics = Simulator::new()
+            let metrics = Simulator::default()
                 .run(
                     black_box(&context),
                     black_box(&universe),
@@ -51,7 +51,7 @@ fn build_case(paths: usize, manifest_dir: &Path) -> (Context, LegUniverse) {
         .create(OptionType::Call, 155.0, expiry)
         .expect("missing long leg");
 
-    let mut position = Position::new();
+    let mut position = Position::default();
     position.push(short, -1);
     position.push(long, 1);
     let leg_universe = LegUniverse::from_positions(vec![position]);

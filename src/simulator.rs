@@ -16,6 +16,17 @@ pub struct Simulator {
     close_slippage_frac: f64,
 }
 
+impl Default for Simulator {
+    fn default() -> Self {
+        let exit_grid = linspace_vec(0.1, 1.0, 10);
+        Self {
+            exit_grid,
+            commission_per_trade: 0.0,
+            close_slippage_frac: 0.0,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Metrics {
     pub expected_value: f64,
@@ -81,15 +92,6 @@ impl PathAcc {
 }
 
 impl Simulator {
-    pub fn new() -> Self {
-        let exit_grid = linspace_vec(0.1, 1.0, 10);
-        Self {
-            exit_grid,
-            commission_per_trade: 0.0,
-            close_slippage_frac: 0.0,
-        }
-    }
-
     pub fn exit_grid(mut self, start: f64, end: f64, points: usize) -> Self {
         self.exit_grid = linspace_vec(start, end, points);
         self
@@ -273,9 +275,7 @@ impl Simulator {
                                     mark += (qty as f64) * leg_marks[leg_idx];
                                 }
                                 *last_mark = mark;
-                                if first_step {
-                                    *min_mark = mark;
-                                } else if mark < *min_mark {
+                                if first_step || mark < *min_mark {
                                     *min_mark = mark;
                                 }
                             }
@@ -373,17 +373,17 @@ mod tests {
             .create(OptionType::Put, 120.0, expiry)
             .expect("missing long put");
 
-        let mut call_spread = Position::new();
+        let mut call_spread = Position::default();
         call_spread.push(short_call, -1);
         call_spread.push(long_call, 1);
 
-        let mut put_spread = Position::new();
+        let mut put_spread = Position::default();
         put_spread.push(short_put, -1);
         put_spread.push(long_put, 1);
 
         let universe = LegUniverse::from_positions(vec![call_spread, put_spread]);
         let scenario = Scenario::new(&context, &universe).expect("failed to build scenario");
-        let metrics = Simulator::new()
+        let metrics = Simulator::default()
             .run(&context, &universe, &scenario)
             .expect("simulation returned no metrics");
         assert_eq!(metrics.len(), 2);
@@ -426,7 +426,7 @@ mod tests {
             .create(OptionType::Call, 150.0, expiry)
             .expect("missing call leg");
 
-        let mut position = Position::new();
+        let mut position = Position::default();
         position.push(call, 1);
         let universe = LegUniverse::from_positions(vec![position]);
 
@@ -439,7 +439,7 @@ mod tests {
             var_cum: vec![0.0],
         };
 
-        let err = Simulator::new()
+        let err = Simulator::default()
             .run(&context, &universe, &scenario)
             .expect_err("expected error for zero-step scenario");
         assert!(
@@ -460,7 +460,7 @@ mod tests {
             .create(OptionType::Put, 150.0, expiry)
             .expect("missing put leg");
 
-        let mut position = Position::new();
+        let mut position = Position::default();
         position.push(call, 1);
         position.push(put, 1);
         let premium = position.premium;
@@ -478,7 +478,7 @@ mod tests {
             var_cum: vec![0.0, 0.0],
         };
 
-        let metrics = Simulator::new()
+        let metrics = Simulator::default()
             .run(&context, &universe, &scenario)
             .expect("simulation returned no metrics");
         assert_eq!(metrics.len(), 1);
@@ -519,11 +519,11 @@ mod tests {
             .create(OptionType::Call, 150.0, expiry)
             .expect("missing call leg");
 
-        let mut long_call = Position::new();
+        let mut long_call = Position::default();
         long_call.push(call, 1);
         let long_premium = long_call.premium;
 
-        let mut short_call = Position::new();
+        let mut short_call = Position::default();
         short_call.push(call, -1);
         let short_premium = short_call.premium;
 
@@ -540,7 +540,7 @@ mod tests {
             var_cum: vec![0.0, 0.0, 0.0, 0.0],
         };
 
-        let metrics = Simulator::new()
+        let metrics = Simulator::default()
             .run(&context, &universe, &scenario)
             .expect("simulation returned no metrics");
         assert_eq!(metrics.len(), 2);

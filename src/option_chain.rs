@@ -76,7 +76,7 @@ impl OptionChainSide {
             mid: Vec::with_capacity(capacity),
             iv: Vec::with_capacity(capacity),
             spot,
-            date: date,
+            date,
             tau_range: Vec::with_capacity(capacity),
             index: 0,
             last_expire: None,
@@ -89,9 +89,7 @@ impl OptionChainSide {
         let iv = contract.implied_volatility;
         let mid = (contract.ask + contract.bid) * 0.5;
 
-        let is_new_expire = self
-            .last_expire
-            .map_or(true, |last_expire| last_expire != contract.expiration);
+        let is_new_expire = self.last_expire != Some(contract.expiration);
 
         if is_new_expire {
             self.expire.push(contract.expiration);
@@ -129,10 +127,7 @@ impl OptionChainSide {
     }
 
     pub fn expire_id(&self, expire: NaiveDate) -> Option<usize> {
-        match self.expire.binary_search(&expire) {
-            Ok(id) => Some(id),
-            Err(_) => None,
-        }
+        self.expire.binary_search(&expire).ok()
     }
 
     pub fn strike(&self, strike: f64, expire_id: usize) -> Option<(f64, f64)> {

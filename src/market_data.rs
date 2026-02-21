@@ -106,7 +106,7 @@ pub enum DbMode {
 #[derive(Debug)]
 pub enum IngestError {
     Db(rusqlite::Error),
-    Http(ureq::Error),
+    Http(Box<ureq::Error>),
     Decode(std::io::Error),
 }
 
@@ -138,7 +138,7 @@ impl From<rusqlite::Error> for IngestError {
 
 impl From<ureq::Error> for IngestError {
     fn from(value: ureq::Error) -> Self {
-        Self::Http(value)
+        Self::Http(Box::new(value))
     }
 }
 
@@ -323,7 +323,7 @@ impl MarketData {
             .query("includeAdjustedClose", "true")
             .set("User-Agent", "Mozilla/5.0")
             .call()
-            .map_err(IngestError::Http)?
+            .map_err(IngestError::from)?
             .into_json::<YahooChartResponse>()
             .map_err(IngestError::Decode)?;
         if body.chart.result.is_empty() {
@@ -567,9 +567,7 @@ impl MarketData {
             combined_vol.push(derived.vol20_adj[i].or(derived.vol20[i]));
         }
         let vol_trend = Self::rolling_trend_tstat(&combined_vol, VOL_WINDOW);
-        for i in 0..n {
-            derived.vol_trend20[i] = vol_trend[prior_vol_len + i];
-        }
+        derived.vol_trend20[..n].copy_from_slice(&vol_trend[prior_vol_len..(prior_vol_len + n)]);
 
         let prior_adj_base =
             self.get_prior_adjclose_values(ticker, first_ts, (VOL_WINDOW - 1) as i64)?;
@@ -580,9 +578,8 @@ impl MarketData {
             combined_adj.push(row.adjclose.or(Some(row.close)));
         }
         let adj_trend = Self::rolling_trend_tstat(&combined_adj, VOL_WINDOW);
-        for i in 0..n {
-            derived.adjclose_trend20[i] = adj_trend[prior_adj_len + i];
-        }
+        derived.adjclose_trend20[..n]
+            .copy_from_slice(&adj_trend[prior_adj_len..(prior_adj_len + n)]);
 
         Ok(derived)
     }
@@ -606,6 +603,7 @@ impl MarketData {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn get_prior_cc_logs(
         &self,
         ticker: &str,

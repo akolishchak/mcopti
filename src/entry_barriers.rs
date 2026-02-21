@@ -268,7 +268,7 @@ mod tests {
             .create(OptionType::Call, 155.0, expiry)
             .expect("missing long call");
 
-        let mut position = Position::new();
+        let mut position = Position::default();
         position.push(short_call, -1);
         position.push(long_call, 1);
         position

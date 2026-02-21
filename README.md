@@ -43,13 +43,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .create(OptionType::Call, 155.0, expiry)
         .expect("long leg");
 
-    let mut pos = Position::new();
+    let mut pos = Position::default();
     pos.push(short, -1);
     pos.push(long, 1);
 
     let universe = LegUniverse::from_positions(vec![pos]);
     let scenario = Scenario::new(&ctx, &universe)?;
-    let sim = Simulator::new();
+    let sim = Simulator::default();
     let metrics = sim
         .run(&ctx, &universe, &scenario)
         .expect("simulation produced no metrics");

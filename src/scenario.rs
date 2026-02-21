@@ -82,7 +82,7 @@ impl Scenario {
             OptionType::Call
         };
         let vol_surface = &context.vol_surface;
-        let ncal_max = days_to_expiry.min(365).max(1);
+        let ncal_max = days_to_expiry.clamp(1, 365);
         let factor_clamp = context.config.factor_clamp;
         // dynamic factor curve f_day
         // f_by_day[d] scales IV to match realized vol over d calendar days.
@@ -116,8 +116,7 @@ impl Scenario {
                 let next = (t + step).min(close_dt);
                 // Use step end for tau so simulator timestamps align to row lookups.
                 let dt_year = (next - t).as_seconds_f64() / SECONDS_PER_YEAR;
-                let tau =
-                    ((expiry_close - next).as_seconds_f64() as f64 / SECONDS_PER_YEAR).max(1e-8);
+                let tau = ((expiry_close - next).as_seconds_f64() / SECONDS_PER_YEAR).max(1e-8);
 
                 dt_years.push(dt_year);
                 tau_driver.push(tau);
@@ -271,7 +270,7 @@ fn fill_sigma_eff(
     intraday_minutes: f64,
     dt_years: &[f64],
     sigma_eff: &mut [f64],
-    median_buf: &mut Vec<f64>,
+    median_buf: &mut [f64],
 ) {
     // median_buf holds the sigma samples for this day; it is mutated in place.
     let sigma_day = median_inplace(median_buf).unwrap_or(0.2);
@@ -298,7 +297,7 @@ fn fill_sigma_eff(
     }
 }
 
-fn median_inplace(buf: &mut Vec<f64>) -> Option<f64> {
+fn median_inplace(buf: &mut [f64]) -> Option<f64> {
     if buf.is_empty() {
         return None;
     }
@@ -363,7 +362,7 @@ mod tests {
             .create(OptionType::Call, 155.0, expiry)
             .expect("missing long leg");
 
-        let mut position = Position::new();
+        let mut position = Position::default();
         position.push(short, -1);
         position.push(long, 1);
         let leg_universe = LegUniverse::from_positions(vec![position]);

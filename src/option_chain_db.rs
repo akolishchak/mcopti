@@ -1,6 +1,7 @@
 use crate::raw_option_chain::{OptionChainError, parse_option_chain_file};
-use crate::{OptionType, RawOptionChain};
-use rusqlite::{Connection, OpenFlags, Transaction, params};
+use crate::{OptionType, Position, RawOptionChain};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
+use rusqlite::{params_from_iter, types::Value};
 use std::collections::HashMap;
 use std::error::Error as StdError;
 use std::fmt::{Display, Formatter};
@@ -286,6 +287,96 @@ impl OptionChainDb {
         Ok(())
     }
 
+    pub fn position_mark_mid(
+        &self,
+        symbol: &str,
+        day: &str,
+        position: &Position,
+    ) -> OptionChainDbResult<Option<f64>> {
+        if position.legs.is_empty() {
+            return Ok(Some(0.0));
+        }
+
+        let mut sql = String::from(
+            "
+            WITH req(opt_type, strike, exp_date, qty) AS (
+            ",
+        );
+
+        for i in 0..position.legs.len() {
+            if i > 0 {
+                sql.push_str(" UNION ALL ");
+            }
+            sql.push_str("SELECT ?, ?, ?, ?");
+        }
+        sql.push_str(
+            "
+            )
+            SELECT (c.bid + c.ask) / 2.0 AS mid, req.qty
+            FROM req
+            JOIN symbols y     ON y.sym = ?
+            JOIN snapshots s   ON s.symbol_id = y.id AND s.snap_date = ?
+            JOIN expirations e ON e.snapshot_id = s.id AND e.exp_date = req.exp_date
+            JOIN contracts c
+              ON c.snapshot_id = s.id
+             AND c.expiration_id = e.id
+             AND c.opt_type = req.opt_type
+             AND c.strike = req.strike
+            ",
+        );
+
+        let mut bind: Vec<Value> = Vec::with_capacity(4 * position.legs.len() + 2);
+        for (leg, qty) in &position.legs {
+            bind.push(Value::Text(
+                Self::option_type_code(leg.option_type).to_string(),
+            ));
+            bind.push(Value::Real(leg.strike));
+            bind.push(Value::Text(leg.expire.format("%Y-%m-%d").to_string()));
+            bind.push(Value::Integer(*qty));
+        }
+        bind.push(Value::Text(symbol.to_string()));
+        bind.push(Value::Text(day.to_string()));
+
+        let mut stmt = self.connection.prepare(&sql)?;
+        let mut rows = stmt.query(params_from_iter(bind.iter()))?;
+
+        let mut sum = 0.0;
+        let mut found = 0usize;
+        while let Some(row) = rows.next()? {
+            let Some(mid) = row.get::<_, Option<f64>>(0)? else {
+                continue;
+            };
+            let qty: i64 = row.get(1)?;
+            sum += mid * qty as f64;
+            found += 1;
+        }
+
+        if found != position.legs.len() {
+            return Ok(None);
+        }
+
+        Ok(Some(sum))
+    }
+
+    pub fn spot_at(&self, symbol: &str, day: &str) -> OptionChainDbResult<Option<f64>> {
+        let spot = self
+            .connection
+            .query_row(
+                "
+                SELECT s.last_price
+                FROM snapshots s
+                JOIN symbols y ON y.id = s.symbol_id
+                WHERE y.sym = ?1 AND s.snap_date = ?2
+                LIMIT 1
+                ",
+                params![symbol, day],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        Ok(spot)
+    }
+
     fn option_type_code(option_type: OptionType) -> &'static str {
         match option_type {
             OptionType::Call => "C",
@@ -349,11 +440,12 @@ impl OptionChainDb {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Context, LegBuilder};
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
 
     #[test]
-    fn ingests_all_json_files_in_tests_fixtures() {
+    fn ingests_all_json() {
         let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
         let json_files = option_chain_json_files(&fixture_dir);
         assert!(
@@ -405,7 +497,7 @@ mod tests {
 
         let ingested = db.ingest_from_json().expect("failed to ingest fixture");
         assert_eq!(ingested, json_files.len());
- 
+
         let symbol_count: usize = db
             .connection
             .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
@@ -431,6 +523,65 @@ mod tests {
         assert_eq!(contracts_count, expected_contracts.len());
     }
 
+    #[test]
+    fn spot_at() {
+        let (mut db, symbol, day, payload) = single_fixture_db();
+
+        db.ingest(&symbol, &payload)
+            .expect("failed to ingest single fixture payload");
+
+        let spot = db
+            .spot_at(&symbol, &day)
+            .expect("spot_at query should succeed");
+        assert_eq!(spot, Some(payload.last_price));
+    }
+
+    #[test]
+    fn position_mark_mid() {
+        let (mut db, symbol, day, payload) = single_fixture_db();
+
+        assert!(
+            payload.data.len() >= 2,
+            "expected fixture to contain at least two contracts"
+        );
+
+        db.ingest(&symbol, &payload)
+            .expect("failed to ingest single fixture payload");
+
+        let c0 = &payload.data[0];
+        let c1 = &payload.data[1];
+        let q0 = 1_i64;
+        let q1 = -2_i64;
+
+        let context = Context::from_raw_option_chain(&symbol, &payload);
+        let leg_builder = LegBuilder::new(&context);
+        let mut position = Position::default();
+        position.push(
+            leg_builder
+                .create(c0.option_type, c0.strike, c0.expiration)
+                .expect("fixture leg 0 should be buildable"),
+            q0,
+        );
+        position.push(
+            leg_builder
+                .create(c1.option_type, c1.strike, c1.expiration)
+                .expect("fixture leg 1 should be buildable"),
+            q1,
+        );
+
+        let expected =
+            ((c0.bid + c0.ask) / 2.0) * q0 as f64 + ((c1.bid + c1.ask) / 2.0) * q1 as f64;
+        let got = db
+            .position_mark_mid(&symbol, &day, &position)
+            .expect("position_mark_mid query should succeed");
+
+        let got = got.expect("all selected fixture legs should exist in db");
+        assert!(
+            (got - expected).abs() < 1e-12,
+            "got={got}, expected={expected}"
+        );
+    }
+
     fn option_chain_json_files(dir: &Path) -> Vec<PathBuf> {
         let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
             .expect("failed to read fixtures directory")
@@ -443,5 +594,27 @@ mod tests {
             .collect();
         files.sort();
         files
+    }
+
+    fn single_fixture_db() -> (OptionChainDb, String, String, RawOptionChain) {
+        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let json_files = option_chain_json_files(&fixture_dir);
+        let file = json_files
+            .first()
+            .expect("expected at least one option-chain fixture")
+            .clone();
+
+        let payload = parse_option_chain_file(&file).expect("failed to parse fixture json");
+        let symbol = OptionChainDb::ticker_from_file_name(&file)
+            .expect("fixture file should include ticker");
+        let day = payload.date.format("%Y-%m-%d").to_string();
+        let db = OptionChainDb::default_memory(
+            fixture_dir
+                .to_str()
+                .expect("fixture directory path should be valid UTF-8"),
+        )
+        .expect("failed to initialize in-memory options db");
+
+        (db, symbol, day, payload)
     }
 }

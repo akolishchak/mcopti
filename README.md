@@ -93,6 +93,21 @@ cargo run --bin ingest_market_data -- AAPL 2024-01-01
 cargo run --bin ingest_market_data -- tickers.txt 2024-01-01 2025-01-01
 ```
 
+## Option chain ingest CLI
+Use the built-in binary to ingest all option chain JSON files from a folder into
+`options.db` in that same folder.
+This CLI is used to prepare option chain data for backtesting.
+
+Run:
+```
+cargo run --bin ingest_option_chain_db -- <folder_path>
+```
+
+Example:
+```
+cargo run --bin ingest_option_chain_db -- tests/fixtures
+```
+
 ## Shapes and outputs
 - `VolSurface::row` returns total variance across a fixed log-moneyness grid; `VolSurface::iv`
   returns implied vol.

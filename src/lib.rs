@@ -9,6 +9,7 @@ pub mod leg_universe;
 pub mod market_calendar;
 pub mod market_data;
 pub mod option_chain;
+pub mod option_chain_db;
 pub mod option_math;
 pub mod pchip;
 pub mod position;

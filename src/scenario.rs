@@ -328,7 +328,7 @@ mod tests {
     use serde::Deserialize;
     use std::{fs, path::PathBuf};
 
-    const REF_JSON: &str = include_str!("../tests/fixtures/scenario_reference.json");
+    const REF_JSON: &str = include_str!("../tests/references/scenario_reference.json");
 
     #[derive(Deserialize)]
     struct Reference {

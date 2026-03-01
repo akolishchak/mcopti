@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scenario = Scenario::new(&ctx, &universe)?;
     let sim = Simulator::default();
     let metrics = sim
-        .run(&ctx, &universe, &scenario)
+        .run(&ctx, universe, &scenario)
         .expect("simulation produced no metrics");
 
     println!("positions: {}", metrics.len());
@@ -111,8 +111,8 @@ cargo run --bin ingest_option_chain_db -- tests/fixtures
 ## Shapes and outputs
 - `VolSurface::row` returns total variance across a fixed log-moneyness grid; `VolSurface::iv`
   returns implied vol.
-- `Simulator::run` returns `Result<Vec<Metrics>, SimulatorError>`, one `Metrics` per position:
-  `expected_value` and drawdown-based `risk`.
+- `Simulator::run` returns `Result<Vec<SimulationStats>, SimulatorError>`, one `SimulationStats`
+  per position: original `position`, `expected_value`, and drawdown-based `risk`.
 - `EntryBarriers::new` computes per-position entry barrier z-scores (`z_win`, `z_loss`) from
   target mark inversion and scenario volatility scaling.
 

@@ -78,6 +78,7 @@ pub enum OptionChainDbError {
     Io(std::io::Error),
     Parse(OptionChainError),
     InvalidPayload(String),
+    DataNotFound,
 }
 
 pub type OptionChainDbResult<T> = std::result::Result<T, OptionChainDbError>;
@@ -89,6 +90,7 @@ impl Display for OptionChainDbError {
             Self::Io(err) => write!(f, "io error: {err}"),
             Self::Parse(err) => write!(f, "parse error: {err}"),
             Self::InvalidPayload(msg) => write!(f, "invalid payload: {msg}"),
+            Self::DataNotFound => write!(f, "expiration and/or strike not found"),
         }
     }
 }
@@ -100,6 +102,7 @@ impl StdError for OptionChainDbError {
             Self::Io(err) => Some(err),
             Self::Parse(err) => Some(err),
             Self::InvalidPayload(_) => None,
+            Self::DataNotFound => None,
         }
     }
 }
@@ -123,12 +126,13 @@ impl From<OptionChainError> for OptionChainDbError {
 }
 
 impl OptionChainDb {
-    pub fn new(data_path: &str, dbmode: OptionsDbMode) -> OptionChainDbResult<Self> {
-        let path = format!("{data_path}/{OPTION_DB_FILE}");
+    pub fn new(data_path: impl AsRef<Path>, dbmode: OptionsDbMode) -> OptionChainDbResult<Self> {
+        let data_path = data_path.as_ref();
+        let path = data_path.join(OPTION_DB_FILE);
 
         let connection = match dbmode {
             OptionsDbMode::Read => {
-                let uri = format!("file:{path}?mode=ro&immutable=1");
+                let uri = format!("file:{}?mode=ro&immutable=1", path.display());
 
                 let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
                     | OpenFlags::SQLITE_OPEN_URI
@@ -147,7 +151,7 @@ impl OptionChainDb {
                 conn
             }
             OptionsDbMode::Write => {
-                let conn = Connection::open(path)?;
+                let conn = Connection::open(&path)?;
                 conn.execute_batch(
                     r#"
                     PRAGMA journal_mode=WAL;
@@ -175,7 +179,7 @@ impl OptionChainDb {
 
         Ok(Self {
             connection,
-            data_path: PathBuf::from(data_path),
+            data_path: data_path.to_path_buf(),
         })
     }
 
@@ -287,14 +291,9 @@ impl OptionChainDb {
         Ok(())
     }
 
-    pub fn position_mark_mid(
-        &self,
-        symbol: &str,
-        day: &str,
-        position: &Position,
-    ) -> OptionChainDbResult<Option<f64>> {
+    pub fn position_mark_mid(&self, symbol: &str, position: &Position) -> OptionChainDbResult<f64> {
         if position.legs.is_empty() {
-            return Ok(Some(0.0));
+            return Ok(0.0);
         }
 
         let mut sql = String::from(
@@ -315,7 +314,7 @@ impl OptionChainDb {
             SELECT (c.bid + c.ask) / 2.0 AS mid, req.qty
             FROM req
             JOIN symbols y     ON y.sym = ?
-            JOIN snapshots s   ON s.symbol_id = y.id AND s.snap_date = ?
+            JOIN snapshots s   ON s.symbol_id = y.id
             JOIN expirations e ON e.snapshot_id = s.id AND e.exp_date = req.exp_date
             JOIN contracts c
               ON c.snapshot_id = s.id
@@ -325,7 +324,7 @@ impl OptionChainDb {
             ",
         );
 
-        let mut bind: Vec<Value> = Vec::with_capacity(4 * position.legs.len() + 2);
+        let mut bind: Vec<Value> = Vec::with_capacity(4 * position.legs.len() + 1);
         for (leg, qty) in &position.legs {
             bind.push(Value::Text(
                 Self::option_type_code(leg.option_type).to_string(),
@@ -335,7 +334,6 @@ impl OptionChainDb {
             bind.push(Value::Integer(*qty));
         }
         bind.push(Value::Text(symbol.to_string()));
-        bind.push(Value::Text(day.to_string()));
 
         let mut stmt = self.connection.prepare(&sql)?;
         let mut rows = stmt.query(params_from_iter(bind.iter()))?;
@@ -352,10 +350,10 @@ impl OptionChainDb {
         }
 
         if found != position.legs.len() {
-            return Ok(None);
+            return Err(OptionChainDbError::DataNotFound);
         }
 
-        Ok(Some(sum))
+        Ok(sum)
     }
 
     pub fn spot_at(&self, symbol: &str, day: &str) -> OptionChainDbResult<Option<f64>> {
@@ -538,7 +536,7 @@ mod tests {
 
     #[test]
     fn position_mark_mid() {
-        let (mut db, symbol, day, payload) = single_fixture_db();
+        let (mut db, symbol, _day, payload) = single_fixture_db();
 
         assert!(
             payload.data.len() >= 2,
@@ -572,10 +570,9 @@ mod tests {
         let expected =
             ((c0.bid + c0.ask) / 2.0) * q0 as f64 + ((c1.bid + c1.ask) / 2.0) * q1 as f64;
         let got = db
-            .position_mark_mid(&symbol, &day, &position)
+            .position_mark_mid(&symbol, &position)
             .expect("position_mark_mid query should succeed");
 
-        let got = got.expect("all selected fixture legs should exist in db");
         assert!(
             (got - expected).abs() < 1e-12,
             "got={got}, expected={expected}"

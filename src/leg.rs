@@ -5,7 +5,7 @@ use std::{error::Error, fmt};
 
 use crate::{Context, OptionType};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Leg {
     pub option_type: OptionType,
     pub strike: f64,

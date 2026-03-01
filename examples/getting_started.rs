@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scenario = Scenario::new(&ctx, &universe)?;
     let sim = Simulator::default();
     let metrics = sim
-        .run(&ctx, &universe, &scenario)
+        .run(&ctx, universe, &scenario)
         .expect("simulation produced no metrics");
 
     println!("positions: {}", metrics.len());

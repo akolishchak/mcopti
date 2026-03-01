@@ -1,7 +1,8 @@
 //! Price legs and positions along simulated scenario paths.
 
 use crate::{
-    Context, LegUniverse, OptionType, Scenario, bs_price, interp_linear_kgrid, linspace_vec,
+    Context, LegUniverse, OptionType, Position, Scenario, bs_price, interp_linear_kgrid,
+    linspace_vec,
 };
 use rayon::prelude::*;
 use std::borrow::Cow;
@@ -28,7 +29,8 @@ impl Default for Simulator {
 }
 
 #[derive(Debug)]
-pub struct Metrics {
+pub struct SimulationStats {
+    pub position: Position,
     pub expected_value: f64,
     pub risk: f64,
 }
@@ -111,9 +113,9 @@ impl Simulator {
     pub fn run(
         &self,
         context: &Context,
-        universe: &LegUniverse,
+        universe: LegUniverse,
         scenario: &Scenario,
-    ) -> Result<Vec<Metrics>, SimulatorError> {
+    ) -> Result<Vec<SimulationStats>, SimulatorError> {
         let calendar = &context.calendar;
         let vol_surface = &context.vol_surface;
         let s_path = &scenario.s_path;
@@ -123,7 +125,6 @@ impl Simulator {
         let leg_count = universe.legs.len();
         let max_expire = universe.max_expire;
         let positions_idx = &universe.positions_idx;
-        let positions = &universe.positions;
         let pos_count = positions_idx.len();
         let ln_strike: Vec<f64> = universe.legs.iter().map(|leg| leg.strike.ln()).collect();
         let (_, max_expiry_close) = calendar.session(max_expire);
@@ -303,13 +304,15 @@ impl Simulator {
 
         let mut metrics = Vec::with_capacity(pos_count);
         let inv_paths = 1.0 / (acc.paths_done as f64);
+        let positions = universe.positions;
         for (pos, (&sum_last, &worst_min)) in positions
-            .iter()
+            .into_iter()
             .zip(acc.sum_last.iter().zip(acc.worst_min.iter()))
         {
             let expected_value = sum_last * inv_paths - pos.premium;
             let risk = (pos.premium - worst_min).max(0.0);
-            metrics.push(Metrics {
+            metrics.push(SimulationStats {
+                position: pos,
                 expected_value,
                 risk,
             });
@@ -384,7 +387,7 @@ mod tests {
         let universe = LegUniverse::from_positions(vec![call_spread, put_spread]);
         let scenario = Scenario::new(&context, &universe).expect("failed to build scenario");
         let metrics = Simulator::default()
-            .run(&context, &universe, &scenario)
+            .run(&context, universe, &scenario)
             .expect("simulation returned no metrics");
         assert_eq!(metrics.len(), 2);
 
@@ -440,7 +443,7 @@ mod tests {
         };
 
         let err = Simulator::default()
-            .run(&context, &universe, &scenario)
+            .run(&context, universe, &scenario)
             .expect_err("expected error for zero-step scenario");
         assert!(
             matches!(err, SimulatorError::InvalidInput(_)),
@@ -479,7 +482,7 @@ mod tests {
         };
 
         let metrics = Simulator::default()
-            .run(&context, &universe, &scenario)
+            .run(&context, universe, &scenario)
             .expect("simulation returned no metrics");
         assert_eq!(metrics.len(), 1);
 
@@ -541,7 +544,7 @@ mod tests {
         };
 
         let metrics = Simulator::default()
-            .run(&context, &universe, &scenario)
+            .run(&context, universe, &scenario)
             .expect("simulation returned no metrics");
         assert_eq!(metrics.len(), 2);
 

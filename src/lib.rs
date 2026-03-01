@@ -1,5 +1,6 @@
 //! Crate entry points and public re-exports for option simulation.
 
+pub mod backtest;
 pub mod config;
 pub mod context;
 pub mod entry_barriers;
@@ -8,6 +9,7 @@ pub mod leg;
 pub mod leg_universe;
 pub mod market_calendar;
 pub mod market_data;
+pub mod open_position;
 pub mod option_chain;
 pub mod option_chain_db;
 pub mod option_math;
@@ -28,7 +30,9 @@ pub use {
     leg_universe::LegUniverse,
     market_calendar::MarketCalendar,
     market_data::{Column, IngestError, MarketData},
+    open_position::{Metrics, OpenPosition},
     option_chain::{OptionChain, OptionChainSide},
+    option_chain_db::{OptionChainDb, OptionChainDbError, OptionsDbMode},
     option_math::{bs_price, ncdf, simulate_paths},
     pchip::Pchip,
     position::Position,

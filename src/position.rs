@@ -2,7 +2,7 @@
 
 use crate::Leg;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Position {
     pub legs: Vec<(Leg, i64)>,
     pub premium: f64,
@@ -18,5 +18,10 @@ impl Position {
     pub fn add(mut self, leg: Leg, qty: i64) -> Self {
         self.push(leg, qty);
         self
+    }
+
+    pub fn side(&self) -> f64 {
+        // TODO: consider alternative approaches to detect side
+        self.premium.signum()
     }
 }

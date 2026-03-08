@@ -3,6 +3,9 @@ name = "mcopti"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+private_queries = []
+
 [dependencies]
 # date handling
 chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }

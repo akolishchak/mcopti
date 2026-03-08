@@ -18,10 +18,12 @@ pub mod position;
 pub mod raw_option_chain;
 pub mod scenario;
 pub mod simulator;
+pub mod spread_screener;
 pub mod vol_dynamics;
 pub mod volsurface;
 
 pub use {
+    backtest::{Backtest, ChainScreener, ScreenerCandidate},
     config::{Config, DEFAULT_CONFIG},
     context::Context,
     entry_barriers::EntryBarriers,

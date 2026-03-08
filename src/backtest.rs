@@ -23,13 +23,13 @@ pub struct Backtest {
 }
 
 pub struct ScreenerCandidate {
-    ticker: String,
-    raw_chain: RawOptionChain,
-    positions: Vec<Position>,
+    pub ticker: String,
+    pub raw_chain: RawOptionChain,
+    pub positions: Vec<Position>,
 }
 
 impl ScreenerCandidate {
-    pub(crate) fn new(ticker: String, raw_chain: RawOptionChain, positions: Vec<Position>) -> Self {
+    pub fn new(ticker: String, raw_chain: RawOptionChain, positions: Vec<Position>) -> Self {
         Self {
             ticker,
             raw_chain,

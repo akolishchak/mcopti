@@ -291,6 +291,21 @@ impl OptionChainDb {
         Ok(())
     }
 
+    pub fn query_map<T, F>(&self, query: &str, mapper: F) -> OptionChainDbResult<Vec<T>>
+    where
+        F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+    {
+        let mut stmt = self.connection.prepare(query)?;
+        let rows = stmt.query_map([], mapper)?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+
+        Ok(out)
+    }
+
     pub fn position_mark_mid(&self, symbol: &str, position: &Position) -> OptionChainDbResult<f64> {
         if position.legs.is_empty() {
             return Ok(0.0);

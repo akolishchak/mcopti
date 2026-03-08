@@ -3,7 +3,7 @@
 use chrono::NaiveDate;
 use std::{error::Error, fmt};
 
-use crate::{Context, OptionType};
+use crate::{Context, OptionChain, OptionType};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Leg {
@@ -16,7 +16,7 @@ pub struct Leg {
 }
 
 pub struct LegBuilder<'a> {
-    context: &'a Context,
+    option_chain: &'a OptionChain,
 }
 
 #[derive(Debug)]
@@ -38,7 +38,11 @@ impl Error for LegBuilderError {}
 
 impl<'a> LegBuilder<'a> {
     pub fn new(context: &'a Context) -> Self {
-        Self { context }
+        Self::from_option_chain(&context.option_chain)
+    }
+
+    pub fn from_option_chain(option_chain: &'a OptionChain) -> Self {
+        Self { option_chain }
     }
 
     pub fn create(
@@ -48,8 +52,8 @@ impl<'a> LegBuilder<'a> {
         expire: NaiveDate,
     ) -> Result<Leg, LegBuilderError> {
         let option_side = match option_type {
-            OptionType::Call => &self.context.option_chain.calls,
-            OptionType::Put => &self.context.option_chain.puts,
+            OptionType::Call => &self.option_chain.calls,
+            OptionType::Put => &self.option_chain.puts,
         };
 
         let Some(expire_id) = option_side.expire_id(expire) else {

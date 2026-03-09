@@ -87,7 +87,7 @@ struct SpreadSpec {
 
 impl ChainScreener for SpreadScreener {
     fn screen(&self, option_chains_path: &Path) -> Vec<ScreenerCandidate> {
-        let Ok(chain) = OptionChainDb::new(option_chains_path, OptionsDbMode::Memory)
+        let Ok(chain) = OptionChainDb::new(option_chains_path, OptionsDbMode::Read)
             .inspect_err(|err| eprintln!("screener: failed to open options db: {err}"))
         else {
             return Vec::new();
@@ -234,6 +234,7 @@ mod tests {
     fn screen_returns_expected_put_spread_values() {
         let tmp = tempdir().expect("failed to create temp dir");
         copy_arm_fixture(tmp.path());
+        build_options_db(tmp.path());
 
         let screener = SpreadScreener::new(SINGLE_PUT_QUERY);
         let out = screener.screen(tmp.path());
@@ -270,6 +271,7 @@ mod tests {
     fn screen_returns_expected_values_for_mixed_call_and_put_queries() {
         let tmp = tempdir().expect("failed to create temp dir");
         copy_arm_fixture(tmp.path());
+        build_options_db(tmp.path());
 
         let screener = SpreadScreener::new(CALL_AND_PUT_QUERIES);
         let out = screener.screen(tmp.path());
@@ -315,6 +317,16 @@ mod tests {
                 dst.display()
             )
         });
+    }
+
+    fn build_options_db(dir: &Path) {
+        let mut db = OptionChainDb::default_write(
+            dir.to_str()
+                .expect("temp directory path should be valid UTF-8"),
+        )
+        .expect("failed to create options db");
+        db.ingest_from_json()
+            .expect("failed to ingest fixture json into options db");
     }
 
     fn arm_fixture_path() -> PathBuf {

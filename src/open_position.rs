@@ -23,7 +23,7 @@ pub struct Metrics {
 
 impl OpenPosition {
     pub fn new(ticker: String, position: Position, pt_mark: f64, sl_mark: f64) -> Self {
-        let log_price = f64::ln(position.premium);
+        let log_price = position.premium;
 
         Self {
             ticker,
@@ -40,25 +40,24 @@ impl OpenPosition {
     }
 
     pub fn is_expired(&self, date: NaiveDate) -> bool {
-        self.position.legs.iter().any(|(leg, _)| leg.expire >= date)
+        self.position.legs.iter().any(|(leg, _)| date >= leg.expire)
     }
 
     pub fn update(&mut self, date: NaiveDate, price: f64) -> Option<Metrics> {
-        let log_price = f64::ln(price);
-        let side = self.position.side();
-        let ret = side * (log_price - self.log_last_price);
+        let ret = price - self.log_last_price;
         if ret > 0.0 {
             self.wins += ret;
         } else {
             self.losses -= ret;
         }
-        self.pnl = side * (self.log_start_price - self.log_last_price);
+        self.log_last_price = price;
+        self.pnl = price - self.log_start_price;
         self.drawdown = self.drawdown.min(self.pnl);
         if self.is_expired(date) {
             return Some(self.metrics());
         }
 
-        if side * (price - self.sl_mark) <= 0.0 || side * (price - self.pt_mark) >= 0.0 {
+        if price <= self.sl_mark || price >= self.pt_mark {
             return Some(self.metrics());
         }
 

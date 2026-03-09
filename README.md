@@ -108,6 +108,13 @@ Example:
 cargo run --bin ingest_option_chain_db -- tests/fixtures
 ```
 
+## Backtest spreads binary
+Run:
+```
+cargo run --release --bin backtest_spreads -- <data_dir> [profit_take] [stop_loss]
+```
+
+
 ## Shapes and outputs
 - `VolSurface::row` returns total variance across a fixed log-moneyness grid; `VolSurface::iv`
   returns implied vol.

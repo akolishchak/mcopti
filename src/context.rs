@@ -16,7 +16,7 @@ impl Context {
         let option_chain = OptionChain::from_raw(raw_option_chain);
         let vol_surface = VolSurface::new(&option_chain);
         let year = raw_option_chain.date.year();
-        let calendar = MarketCalendar::new(year, year + 1);
+        let calendar = MarketCalendar::new(year - 1, year + 1);
 
         Self {
             ticker: ticker.to_string(),

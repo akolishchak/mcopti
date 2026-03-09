@@ -42,8 +42,6 @@ pub trait ChainScreener {
     fn screen(&self, option_chains_path: &Path) -> Vec<ScreenerCandidate>;
 }
 
-pub trait ChainDataProvider {}
-
 #[derive(Debug)]
 pub enum BacktestError {
     Io(io::Error),
@@ -120,6 +118,8 @@ impl Backtest {
                 "%Y-%m-%d",
             )
             .unwrap();
+
+            println!("{date}");
             //
             let chain = OptionChainDb::new(day, OptionsDbMode::Read)?;
             //
@@ -134,6 +134,15 @@ impl Backtest {
                     if let Some(metrics) = pos.update(date, price) {
                         // exit, update performance counters
                         pnl += metrics.pnl;
+                        println!(
+                            "[CLOSE] {date} {} mark={:.4} pnl={:.4} pf={:.4} dd={:.4} cum_pnl={:.4}",
+                            pos.ticker,
+                            price,
+                            metrics.pnl,
+                            metrics.profit_factor,
+                            metrics.drawdown,
+                            pnl
+                        );
                         true // remove position
                     } else {
                         false // keep position
@@ -153,6 +162,11 @@ impl Backtest {
             let screened_positions = generator.screen(day);
             let mut candidates = Vec::with_capacity(screened_positions.len() * 5);
             for gen_pos in screened_positions {
+                println!(
+                    "{}: {} candidates, simulating...",
+                    gen_pos.ticker,
+                    gen_pos.positions.len()
+                );
                 let ticker: Rc<str> = Rc::from(gen_pos.ticker);
                 let context = Context::from_raw_option_chain(&ticker, &gen_pos.raw_chain);
                 let universe = LegUniverse::from_positions(gen_pos.positions);
@@ -169,6 +183,7 @@ impl Backtest {
                 else {
                     continue;
                 };
+                println!("{:?}", stats);
                 candidates.extend(stats.into_iter().map(|stat| (Rc::clone(&ticker), stat)));
             }
             //
@@ -185,18 +200,36 @@ impl Backtest {
                 ror_b.total_cmp(&ror_a)
             });
 
-            //todo!("open positions");
             for (ticker, stat) in candidates.into_iter().take(max_positions) {
                 let side = stat.position.side();
                 let pt_mark = stat.position.premium * (1.0 + self.profit_take.max(0.0) * side);
                 let sl_mark = stat.position.premium * (1.0 - self.stop_loss.max(0.0) * side);
+                let ror = if stat.risk != 0.0 {
+                    stat.expected_value / stat.risk
+                } else {
+                    f64::NAN
+                };
+                println!(
+                    "[OPEN ] {date} {ticker} legs={} premium={:.4} ev={:.4} risk={:.4} ror={:.4} pt={:.4} sl={:.4}",
+                    stat.position.legs.len(),
+                    stat.position.premium,
+                    stat.expected_value,
+                    stat.risk,
+                    ror,
+                    pt_mark,
+                    sl_mark
+                );
                 let position =
                     OpenPosition::new(ticker.to_string(), stat.position, pt_mark, sl_mark);
                 open_positions.push(position);
             }
         }
 
-        println!("{pnl}");
+        println!(
+            "[SUMMARY] closed_pnl={:.4} open_positions={}",
+            pnl,
+            open_positions.len()
+        );
 
         Ok(())
     }

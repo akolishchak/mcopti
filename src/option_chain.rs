@@ -92,6 +92,20 @@ impl OptionChainSide {
         let is_new_expire = self.last_expire != Some(contract.expiration);
 
         if is_new_expire {
+            if let Some(&(start, end)) = self.tau_range.last()
+                && end - start < 2
+            {
+                // skip single stike expiries
+                self.expire.pop();
+                self.tau.pop();
+                self.tau_range.pop();
+                self.strike.truncate(start);
+                self.k.truncate(start);
+                self.mid.truncate(start);
+                self.iv.truncate(start);
+                self.index = start;
+                self.last_expire = self.expire.last().copied();
+            }
             self.expire.push(contract.expiration);
             self.tau.push(tau);
             self.tau_range.push((self.index, self.index + 1));

@@ -76,7 +76,8 @@ fn fix_market_data_db(data_dir: &Path) -> Result<(), Box<dyn Error>> {
     let mut tickers = Vec::new();
     let day_dir = std::fs::read_dir(data_dir)?
         .flatten()
-        .find(|entry| entry.file_type().is_ok_and(|ft| ft.is_dir()))
+        .filter(|entry| entry.file_type().is_ok_and(|ft| ft.is_dir()))
+        .max_by_key(|entry| entry.file_name())
         .map(|entry| entry.path());
 
     if let Some(day_dir) = day_dir {

@@ -4,6 +4,7 @@ use crate::{
 };
 
 use chrono::NaiveDate;
+use rayon::prelude::*;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs;
@@ -107,11 +108,29 @@ impl Backtest {
         })
     }
 
-    pub fn run(&self, generator: impl ChainScreener) -> Result<(), BacktestError> {
+    pub fn run(&self, generator: impl ChainScreener + Sync) -> Result<(), BacktestError> {
         let mut open_positions: Vec<OpenPosition> = Vec::new();
         let mut pnl = 0.0;
 
-        for day in self.days.iter() {
+        let simulator_jobs: Vec<_> = self
+            .days
+            .par_iter()
+            .map(|day| {
+                let candidates = generator.screen(day);
+                candidates
+                    .into_iter()
+                    .map(|candidate| {
+                        let ticker = candidate.ticker;
+                        let context =
+                            Context::from_raw_option_chain(&ticker, &candidate.raw_chain);
+                        let universe = LegUniverse::from_positions(candidate.positions);
+                        (ticker, context, universe)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        for (day, job) in self.days.iter().zip(simulator_jobs) {
             //
             let date = NaiveDate::parse_from_str(
                 day.file_name().and_then(|n| n.to_str()).unwrap(),
@@ -119,7 +138,7 @@ impl Backtest {
             )
             .unwrap();
 
-            println!("{date}");
+            // println!("{date}");
             //
             let chain = OptionChainDb::new(day, OptionsDbMode::Read)?;
             //
@@ -159,17 +178,14 @@ impl Backtest {
             //
             // check for new positions
             //
-            let screened_positions = generator.screen(day);
-            let mut candidates = Vec::with_capacity(screened_positions.len() * 5);
-            for gen_pos in screened_positions {
-                println!(
-                    "{}: {} candidates, simulating...",
-                    gen_pos.ticker,
-                    gen_pos.positions.len()
-                );
-                let ticker: Rc<str> = Rc::from(gen_pos.ticker);
-                let context = Context::from_raw_option_chain(&ticker, &gen_pos.raw_chain);
-                let universe = LegUniverse::from_positions(gen_pos.positions);
+            let mut candidates = Vec::with_capacity(job.len() * 5);
+            for (ticker, context, universe) in job {
+                // println!(
+                //     "{}: {} candidates, simulating...",
+                //     gen_pos.ticker,
+                //     gen_pos.positions.len()
+                // );
+                let ticker: Rc<str> = Rc::from(ticker);
                 let Ok(scenario) = Scenario::new(&context, &universe)
                     .inspect_err(|err| eprintln!("{}: senario error ={}", ticker, err))
                 else {
@@ -183,7 +199,7 @@ impl Backtest {
                 else {
                     continue;
                 };
-                println!("{:?}", stats);
+                // println!("{:?}", stats);
                 candidates.extend(stats.into_iter().map(|stat| (Rc::clone(&ticker), stat)));
             }
             //

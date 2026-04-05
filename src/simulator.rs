@@ -33,6 +33,7 @@ pub struct SimulationStats {
     pub position: Position,
     pub expected_value: f64,
     pub risk: f64,
+    pub ror: f64,
 }
 
 #[derive(Debug)]
@@ -315,6 +316,7 @@ impl Simulator {
                 position: pos,
                 expected_value,
                 risk,
+                ror: expected_value / risk,
             });
         }
         Ok(metrics)

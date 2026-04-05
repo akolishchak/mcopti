@@ -74,3 +74,13 @@ impl<'a> LegBuilder<'a> {
         })
     }
 }
+
+impl fmt::Display for Leg {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{:?}, {:.0}, {}",
+            self.option_type, self.strike, self.expire
+        )
+    }
+}

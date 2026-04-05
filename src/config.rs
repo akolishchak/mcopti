@@ -8,6 +8,8 @@ pub struct Config {
     pub epsilon: f64,
     pub iv_floor: f64,
     pub seed: u64,
+    pub entry_barrier_ratio_threshold: f64,
+    pub ror_threshold: f64,
 }
 
 pub const DEFAULT_CONFIG: Config = Config::default();
@@ -22,6 +24,8 @@ impl Config {
             epsilon: 1e-12,
             iv_floor: 0.90,
             seed: 7,
+            entry_barrier_ratio_threshold: 0.75,
+            ror_threshold: 0.03,
         }
     }
 }

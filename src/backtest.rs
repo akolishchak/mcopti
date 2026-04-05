@@ -1,6 +1,6 @@
 use crate::{
-    Context, LegUniverse, OpenPosition, OptionChainDb, OptionChainDbError, OptionsDbMode, Position,
-    RawOptionChain, Scenario, Simulator,
+    Context, EntryBarriers, LegUniverse, OpenPosition, OptionChainDb, OptionChainDbError,
+    OptionsDbMode, Position, RawOptionChain, Scenario, Simulator,
 };
 
 use chrono::NaiveDate;
@@ -12,6 +12,171 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
+
+#[derive(Clone, Copy, Debug)]
+pub struct BacktestParameters {
+    pub entry_barrier_ratio_threshold: f64,
+    pub ror_threshold: f64,
+}
+
+#[derive(Clone, Debug)]
+pub struct BacktestSummary {
+    pub parameters: BacktestParameters,
+    pub closed_pnl: f64,
+    pub max_drawdown: f64,
+    pub open_positions: usize,
+    pub wins: usize,
+    pub losses: usize,
+}
+
+#[derive(Clone)]
+struct PreparedCandidate {
+    ticker: Rc<str>,
+    position: Position,
+    expected_value: f64,
+    risk: f64,
+    ror: f64,
+    barrier_ratio: f64,
+}
+
+struct Track {
+    parameters: BacktestParameters,
+    max_positions: usize,
+    profit_take: f64,
+    stop_loss: f64,
+    open_positions: Vec<OpenPosition>,
+    pnl: f64,
+    pnl_peak: f64,
+    max_drawdown: f64,
+    wins: usize,
+    losses: usize,
+}
+
+impl Track {
+    fn new(
+        parameters: BacktestParameters,
+        max_positions: usize,
+        profit_take: f64,
+        stop_loss: f64,
+    ) -> Self {
+        Self {
+            parameters,
+            max_positions,
+            profit_take,
+            stop_loss,
+            open_positions: Vec::new(),
+            pnl: 0.0,
+            pnl_peak: 0.0,
+            max_drawdown: 0.0,
+            wins: 0,
+            losses: 0,
+        }
+    }
+
+    fn update_open_positions(
+        &mut self,
+        chain: &OptionChainDb,
+        date: NaiveDate,
+        verbose: bool,
+    ) -> Result<(), BacktestError> {
+        let mut i = 0;
+        while i < self.open_positions.len() {
+            let should_remove = {
+                let pos = &mut self.open_positions[i];
+                let price = chain.position_mark_mid(&pos.ticker, &pos.position)?;
+                if let Some(metrics) = pos.update(date, price) {
+                    self.pnl += metrics.pnl;
+                    self.pnl_peak = self.pnl_peak.max(self.pnl);
+                    self.max_drawdown = self.max_drawdown.max(self.pnl_peak - self.pnl);
+                    if verbose {
+                        println!(
+                            "[CLOSE] {date} {} {{{}}} mark={:.4} pnl={:.4} pf={:.4} dd={:.4} cum_pnl={:.4}",
+                            pos.ticker,
+                            pos.position,
+                            price,
+                            metrics.pnl,
+                            metrics.profit_factor,
+                            metrics.drawdown,
+                            self.pnl
+                        );
+                    }
+                    if metrics.pnl.is_sign_positive() {
+                        self.wins += 1;
+                    } else {
+                        self.losses += 1;
+                    }
+                    true
+                } else {
+                    false
+                }
+            };
+
+            if should_remove {
+                self.open_positions.swap_remove(i);
+            } else {
+                i += 1;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn open_positions(&mut self, candidates: &[PreparedCandidate], date: NaiveDate, verbose: bool) {
+        let mut opened = 0;
+        for candidate in candidates {
+            if opened == self.max_positions {
+                break;
+            }
+            if candidate.ror < self.parameters.ror_threshold {
+                continue;
+            }
+            if candidate.barrier_ratio < self.parameters.entry_barrier_ratio_threshold {
+                continue;
+            }
+
+            let side = candidate.position.side();
+            let pt_mark = candidate.position.premium * (1.0 + self.profit_take.max(0.0) * side);
+            let sl_mark = candidate.position.premium * (1.0 - self.stop_loss.max(0.0) * side);
+            if verbose {
+                println!(
+                    "[OPEN ] {date} {} {{{}}} premium={:.4} ev={:.4} risk={:.4} ror={:.4} pt={:.4} sl={:.4}",
+                    candidate.ticker,
+                    candidate.position,
+                    candidate.position.premium,
+                    candidate.expected_value,
+                    candidate.risk,
+                    candidate.ror,
+                    pt_mark,
+                    sl_mark
+                );
+            }
+            self.open_positions.push(OpenPosition::new(
+                candidate.ticker.to_string(),
+                candidate.position.clone(),
+                pt_mark,
+                sl_mark,
+            ));
+            opened += 1;
+        }
+    }
+
+    fn summary(self) -> BacktestSummary {
+        BacktestSummary {
+            parameters: self.parameters,
+            closed_pnl: self.pnl,
+            max_drawdown: self.max_drawdown,
+            open_positions: self.open_positions.len(),
+            wins: self.wins,
+            losses: self.losses,
+        }
+    }
+}
+
+impl BacktestSummary {
+    pub fn score(&self) -> f64 {
+        self.closed_pnl - self.max_drawdown
+    }
+}
 
 pub struct Backtest {
     // premium coefficients to enter/exit a trade
@@ -84,21 +249,25 @@ impl Error for BacktestError {
 
 impl Backtest {
     pub fn new(
-        data_path: impl AsRef<Path>,
+        data_paths: &[PathBuf],
         profit_take: f64,
         stop_loss: f64,
     ) -> Result<Self, BacktestError> {
-        let mut days: Vec<_> = fs::read_dir(data_path)?
-            .flatten()
-            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-            .map(|e| e.path())
-            .collect();
+        let mut days = Vec::new();
+        for data_path in data_paths {
+            days.extend(
+                fs::read_dir(data_path)?
+                    .flatten()
+                    .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                    .map(|e| e.path()),
+            );
+        }
 
         if days.is_empty() {
             return Err(BacktestError::NoData);
         }
 
-        days.sort_unstable();
+        days.sort_unstable_by(|a, b| a.file_name().cmp(&b.file_name()));
 
         Ok(Self {
             profit_take,
@@ -108,21 +277,48 @@ impl Backtest {
         })
     }
 
-    pub fn run(&self, generator: impl ChainScreener + Sync) -> Result<(), BacktestError> {
-        let mut open_positions: Vec<OpenPosition> = Vec::new();
-        let mut pnl = 0.0;
+    pub fn run(
+        &self,
+        generator: impl ChainScreener + Sync,
+        parameters: BacktestParameters,
+    ) -> Result<(), BacktestError> {
+        let parameters = [parameters];
+        self.run_tracks(&generator, &parameters, true)?;
+        Ok(())
+    }
 
-        let simulator_jobs: Vec<_> = self
+    pub fn run_tracks(
+        &self,
+        generator: &(impl ChainScreener + Sync),
+        parameters: &[BacktestParameters],
+        verbose: bool,
+    ) -> Result<Vec<BacktestSummary>, BacktestError> {
+        if parameters.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut tracks: Vec<_> = parameters
+            .iter()
+            .copied()
+            .map(|parameters| {
+                Track::new(
+                    parameters,
+                    self.max_positions,
+                    self.profit_take,
+                    self.stop_loss,
+                )
+            })
+            .collect();
+        let jobs: Vec<_> = self
             .days
             .par_iter()
             .map(|day| {
-                let candidates = generator.screen(day);
-                candidates
+                generator
+                    .screen(day)
                     .into_iter()
                     .map(|candidate| {
                         let ticker = candidate.ticker;
-                        let context =
-                            Context::from_raw_option_chain(&ticker, &candidate.raw_chain);
+                        let context = Context::from_raw_option_chain(&ticker, &candidate.raw_chain);
                         let universe = LegUniverse::from_positions(candidate.positions);
                         (ticker, context, universe)
                     })
@@ -130,123 +326,103 @@ impl Backtest {
             })
             .collect();
 
-        for (day, job) in self.days.iter().zip(simulator_jobs) {
-            //
+        for (day, job) in self.days.iter().zip(jobs) {
             let date = NaiveDate::parse_from_str(
                 day.file_name().and_then(|n| n.to_str()).unwrap(),
                 "%Y-%m-%d",
             )
             .unwrap();
-
-            // println!("{date}");
-            //
             let chain = OptionChainDb::new(day, OptionsDbMode::Read)?;
-            //
-            // evaluate open positions
-            //
-            let mut i = 0;
-            while i < open_positions.len() {
-                let should_remove = {
-                    let pos = &mut open_positions[i];
-                    // mark position
-                    let price = chain.position_mark_mid(&pos.ticker, &pos.position)?;
-                    if let Some(metrics) = pos.update(date, price) {
-                        // exit, update performance counters
-                        pnl += metrics.pnl;
-                        println!(
-                            "[CLOSE] {date} {} mark={:.4} pnl={:.4} pf={:.4} dd={:.4} cum_pnl={:.4}",
-                            pos.ticker,
-                            price,
-                            metrics.pnl,
-                            metrics.profit_factor,
-                            metrics.drawdown,
-                            pnl
-                        );
-                        true // remove position
-                    } else {
-                        false // keep position
-                    }
-                };
+            let candidates = self.prepare_candidates(job);
 
-                if should_remove {
-                    open_positions.swap_remove(i);
-                } else {
-                    i += 1;
-                }
-            }
-
-            //
-            // check for new positions
-            //
-            let mut candidates = Vec::with_capacity(job.len() * 5);
-            for (ticker, context, universe) in job {
-                // println!(
-                //     "{}: {} candidates, simulating...",
-                //     gen_pos.ticker,
-                //     gen_pos.positions.len()
-                // );
-                let ticker: Rc<str> = Rc::from(ticker);
-                let Ok(scenario) = Scenario::new(&context, &universe)
-                    .inspect_err(|err| eprintln!("{}: senario error ={}", ticker, err))
-                else {
-                    continue;
-                };
-
-                let sim = Simulator::default();
-                let Ok(stats) = sim
-                    .run(&context, universe, &scenario)
-                    .inspect_err(|err| eprintln!("{}: simulator error = {}", ticker, err))
-                else {
-                    continue;
-                };
-                // println!("{:?}", stats);
-                candidates.extend(stats.into_iter().map(|stat| (Rc::clone(&ticker), stat)));
-            }
-            //
-            // rank stats by top RoR
-            // open max_positions from the list
-            //
-            let max_positions = self.max_positions.min(candidates.len());
-            if max_positions == 0 {
-                continue;
-            }
-            candidates.select_nth_unstable_by(max_positions - 1, |a, b| {
-                let ror_a = a.1.expected_value / a.1.risk;
-                let ror_b = b.1.expected_value / b.1.risk;
-                ror_b.total_cmp(&ror_a)
-            });
-
-            for (ticker, stat) in candidates.into_iter().take(max_positions) {
-                let side = stat.position.side();
-                let pt_mark = stat.position.premium * (1.0 + self.profit_take.max(0.0) * side);
-                let sl_mark = stat.position.premium * (1.0 - self.stop_loss.max(0.0) * side);
-                let ror = if stat.risk != 0.0 {
-                    stat.expected_value / stat.risk
-                } else {
-                    f64::NAN
-                };
-                println!(
-                    "[OPEN ] {date} {ticker} legs={} premium={:.4} ev={:.4} risk={:.4} ror={:.4} pt={:.4} sl={:.4}",
-                    stat.position.legs.len(),
-                    stat.position.premium,
-                    stat.expected_value,
-                    stat.risk,
-                    ror,
-                    pt_mark,
-                    sl_mark
-                );
-                let position =
-                    OpenPosition::new(ticker.to_string(), stat.position, pt_mark, sl_mark);
-                open_positions.push(position);
+            for track in &mut tracks {
+                track.update_open_positions(&chain, date, verbose)?;
+                track.open_positions(&candidates, date, verbose);
             }
         }
 
-        println!(
-            "[SUMMARY] closed_pnl={:.4} open_positions={}",
-            pnl,
-            open_positions.len()
-        );
+        let mut summaries: Vec<_> = tracks.into_iter().map(Track::summary).collect();
+        summaries.sort_unstable_by(|a, b| {
+            b.score()
+                .total_cmp(&a.score())
+                .then_with(|| b.closed_pnl.total_cmp(&a.closed_pnl))
+                .then_with(|| a.max_drawdown.total_cmp(&b.max_drawdown))
+                .then_with(|| {
+                    let a_trades = a.wins + a.losses;
+                    let b_trades = b.wins + b.losses;
+                    let a_win_rate = if a_trades == 0 {
+                        0.0
+                    } else {
+                        a.wins as f64 / a_trades as f64
+                    };
+                    let b_win_rate = if b_trades == 0 {
+                        0.0
+                    } else {
+                        b.wins as f64 / b_trades as f64
+                    };
+                    b_win_rate.total_cmp(&a_win_rate)
+                })
+        });
+        if verbose {
+            for summary in &summaries {
+                println!(
+                    "[SUMMARY] barrier_threshold={:.2} ror_threshold={:.2} closed_pnl={:.4} max_drawdown={:.4} open_positions={}, wins={}, losses={}",
+                    summary.parameters.entry_barrier_ratio_threshold,
+                    summary.parameters.ror_threshold,
+                    summary.closed_pnl,
+                    summary.max_drawdown,
+                    summary.open_positions,
+                    summary.wins,
+                    summary.losses
+                );
+            }
+        }
 
-        Ok(())
+        Ok(summaries)
+    }
+
+    fn prepare_candidates(
+        &self,
+        job: Vec<(String, Context, LegUniverse)>,
+    ) -> Vec<PreparedCandidate> {
+        let mut candidates = Vec::with_capacity(job.len() * 5);
+        for (ticker, context, universe) in job {
+            let ticker: Rc<str> = Rc::from(ticker);
+            let Ok(scenario) = Scenario::new(&context, &universe)
+                .inspect_err(|err| eprintln!("{}: senario error ={}", ticker, err))
+            else {
+                continue;
+            };
+
+            let sim = Simulator::default();
+            let Ok(stats) = sim
+                .run(&context, universe, &scenario)
+                .inspect_err(|err| eprintln!("{}: simulator error = {}", ticker, err))
+            else {
+                continue;
+            };
+
+            for stat in stats {
+                let barrier_ratio = EntryBarriers::new(
+                    &context,
+                    &stat.position,
+                    &scenario,
+                    self.profit_take,
+                    self.stop_loss,
+                )
+                .ratio();
+                candidates.push(PreparedCandidate {
+                    ticker: Rc::clone(&ticker),
+                    position: stat.position,
+                    expected_value: stat.expected_value,
+                    risk: stat.risk,
+                    ror: stat.ror,
+                    barrier_ratio,
+                });
+            }
+        }
+
+        candidates.sort_unstable_by(|a, b| b.ror.total_cmp(&a.ror));
+        candidates
     }
 }

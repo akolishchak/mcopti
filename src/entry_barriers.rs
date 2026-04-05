@@ -106,6 +106,11 @@ impl EntryBarriers {
         Self { z_win, z_loss }
     }
 
+    pub fn ratio(&self) -> f64 {
+        let denom = self.z_win.max(1e-9);
+        self.z_loss / denom
+    }
+
     fn build_leg_inputs<'a>(context: &'a Context, position: &Position) -> Vec<LegEvalInput<'a>> {
         let (_, as_of_close) = context.calendar.session(context.option_chain.date);
         position

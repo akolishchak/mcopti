@@ -12,11 +12,13 @@ pub mod market_data;
 pub mod open_position;
 pub mod option_chain;
 pub mod option_chain_db;
+pub mod option_chain_finnhub;
 pub mod option_math;
 pub mod pchip;
 pub mod position;
 pub mod raw_option_chain;
 pub mod scenario;
+mod serde_helpers;
 pub mod simulator;
 pub mod spread_screener;
 pub mod vol_dynamics;
@@ -35,6 +37,7 @@ pub use {
     open_position::{Metrics, OpenPosition},
     option_chain::{OptionChain, OptionChainSide},
     option_chain_db::{OptionChainDb, OptionChainDbError, OptionsDbMode},
+    option_chain_finnhub::{FinnhubOptionChainClient, FinnhubOptionChainError},
     option_math::{bs_price, ncdf, simulate_paths},
     pchip::Pchip,
     position::Position,

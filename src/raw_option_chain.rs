@@ -1,14 +1,14 @@
 //! Deserialize option chain JSON into typed structures and parse files.
 
+use crate::serde_helpers::de_f64;
 use chrono::NaiveDate;
-use serde::de::{Error as DeError, Visitor};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
 /// Root option chain payload.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct RawOptionChain {
     pub date: NaiveDate,
     #[serde(deserialize_with = "de_f64")]
@@ -18,7 +18,7 @@ pub struct RawOptionChain {
 }
 
 /// A single option quote row.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct OptionContract {
     // #[serde(rename = "contractID")]
     // pub contract_id: String,
@@ -63,7 +63,7 @@ pub struct OptionContract {
     // pub intrinsic_value: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OptionType {
     Call,
@@ -126,63 +126,6 @@ pub fn parse_option_chain_reader<R: std::io::Read>(
     reader: R,
 ) -> Result<RawOptionChain, serde_json::Error> {
     serde_json::from_reader(reader)
-}
-
-fn de_f64<'de, D>(deserializer: D) -> Result<f64, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    struct NumVisitor;
-
-    impl<'de> Visitor<'de> for NumVisitor {
-        type Value = f64;
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("number or numeric string")
-        }
-
-        fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E> {
-            Ok(v)
-        }
-
-        fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E> {
-            Ok(v as f64)
-        }
-
-        fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E> {
-            Ok(v as f64)
-        }
-
-        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-        where
-            E: DeError,
-        {
-            v.parse::<f64>().map_err(DeError::custom)
-        }
-
-        fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
-        where
-            E: DeError,
-        {
-            self.visit_str(&v)
-        }
-
-        fn visit_none<E>(self) -> Result<Self::Value, E>
-        where
-            E: DeError,
-        {
-            Ok(0.0)
-        }
-
-        fn visit_unit<E>(self) -> Result<Self::Value, E>
-        where
-            E: DeError,
-        {
-            Ok(0.0)
-        }
-    }
-
-    deserializer.deserialize_any(NumVisitor)
 }
 
 #[cfg(test)]

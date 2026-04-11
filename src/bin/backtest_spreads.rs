@@ -1,5 +1,8 @@
 use chrono::{NaiveDate, Utc};
-use mcopti::{Backtest, MarketData, OptionChainDb, spread_screener::SpreadScreener};
+use mcopti::{
+    Backtest, BacktestParameters, DEFAULT_CONFIG, MarketData, OptionChainDb,
+    spread_screener::SpreadScreener,
+};
 use std::env;
 use std::error::Error;
 use std::io::{Error as IoError, ErrorKind};
@@ -8,8 +11,10 @@ use std::time::SystemTime;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
-    if args.len() < 2 || args.len() > 4 {
-        eprintln!("Usage: backtest_spreads <data_dir> [profit_take] [stop_loss]");
+    if args.len() < 2 || args.len() > 6 {
+        eprintln!(
+            "Usage: backtest_spreads <data_dir> [profit_take] [stop_loss] [entry_barrier_ratio_threshold] [ror_threshold]"
+        );
         std::process::exit(2);
     }
 
@@ -40,10 +45,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         0.50
     };
+    let entry_barrier_ratio_threshold = if let Some(raw) = args.get(4) {
+        raw.parse::<f64>()?
+    } else {
+        DEFAULT_CONFIG.entry_barrier_ratio_threshold
+    };
+    let ror_threshold = if let Some(raw) = args.get(5) {
+        raw.parse::<f64>()?
+    } else {
+        DEFAULT_CONFIG.ror_threshold
+    };
 
-    let backtest = Backtest::new(data_dir, profit_take, stop_loss)?;
+    let parameters = BacktestParameters {
+        entry_barrier_ratio_threshold,
+        ror_threshold,
+    };
+
+    let backtest = Backtest::new(&[data_dir.to_path_buf()], profit_take, stop_loss)?;
     let screener = SpreadScreener::default();
-    backtest.run(screener)?;
+    backtest.run(screener, parameters)?;
 
     Ok(())
 }

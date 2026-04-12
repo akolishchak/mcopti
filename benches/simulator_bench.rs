@@ -1,5 +1,5 @@
 use chrono::NaiveDate;
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use mcopti::{
     Config, Context, DEFAULT_CONFIG, LegUniverse, OptionType, Position, Scenario, Simulator,
     leg::LegBuilder, raw_option_chain::parse_option_chain_file,
@@ -13,24 +13,29 @@ use std::{
 fn bench_simulator_run(c: &mut Criterion) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     ensure_market_data_db(&manifest_dir);
-    let (context, universe) = build_case(100_000, &manifest_dir);
-    let scenario = Scenario::new(&context, &universe).expect("failed to build scenario");
+    let (context, positions) = build_case(100_000, &manifest_dir);
+    let scenario_universe = LegUniverse::from_positions(positions.clone());
+    let scenario = Scenario::new(&context, &scenario_universe).expect("failed to build scenario");
 
     c.bench_function("simulator_run_paths_100k", |b| {
-        b.iter(|| {
-            let metrics = Simulator::default()
-                .run(
-                    black_box(&context),
-                    black_box(&universe),
-                    black_box(&scenario),
-                )
-                .expect("simulation returned no metrics");
-            black_box(metrics);
-        });
+        b.iter_batched(
+            || LegUniverse::from_positions(positions.clone()),
+            |universe| {
+                let metrics = Simulator::default()
+                    .run(
+                        black_box(&context),
+                        black_box(universe),
+                        black_box(&scenario),
+                    )
+                    .expect("simulation returned no metrics");
+                black_box(metrics);
+            },
+            BatchSize::SmallInput,
+        );
     });
 }
 
-fn build_case(paths: usize, manifest_dir: &Path) -> (Context, LegUniverse) {
+fn build_case(paths: usize, manifest_dir: &Path) -> (Context, Vec<Position>) {
     let chain_path = manifest_dir.join("tests/fixtures/ARM_option_chain_20250908_160038.json");
     let raw_chain =
         parse_option_chain_file(&chain_path).expect("failed to load option chain fixture");
@@ -54,8 +59,7 @@ fn build_case(paths: usize, manifest_dir: &Path) -> (Context, LegUniverse) {
     let mut position = Position::default();
     position.push(short, -1);
     position.push(long, 1);
-    let leg_universe = LegUniverse::from_positions(vec![position]);
-    (context, leg_universe)
+    (context, vec![position])
 }
 
 fn ensure_market_data_db(manifest_dir: &Path) {

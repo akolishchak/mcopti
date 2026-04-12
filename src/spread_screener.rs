@@ -11,19 +11,6 @@ pub struct SpreadScreener {
     queries: &'static [(OptionType, &'static str)],
 }
 
-#[cfg(feature = "private_queries")]
-const DEFAULT_QUERIES: [(OptionType, &str); 2] = [
-    (
-        OptionType::Call,
-        include_str!("../queries/spread_query_calls.sql"),
-    ),
-    (
-        OptionType::Put,
-        include_str!("../queries/spread_query_puts.sql"),
-    ),
-];
-
-#[cfg(not(feature = "private_queries"))]
 const DEFAULT_QUERIES: [(OptionType, &str); 1] =
     [(OptionType::Put, include_str!("../queries/spread_query.sql"))];
 

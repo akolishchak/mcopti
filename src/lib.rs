@@ -44,6 +44,7 @@ pub use {
     raw_option_chain::{OptionType, RawOptionChain},
     scenario::{Scenario, ScenarioError},
     simulator::{Simulator, SimulatorError},
+    spread_screener::SpreadScreener,
     vol_dynamics::{VolDynamicsError, mu_table, vol_factor_table},
     volsurface::{VolSurface, interp_linear_kgrid, linspace_vec},
 };

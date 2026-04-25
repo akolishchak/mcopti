@@ -27,6 +27,11 @@ impl SpreadScreener {
         Self { queries }
     }
 
+    pub fn screen_db(&self, chain: &OptionChainDb, option_chains_path: &Path) -> Vec<ScreenerCandidate> {
+        let spreads = self.query_spreads(chain);
+        self.build_candidates(option_chains_path, spreads)
+    }
+
     fn ticker_from_file_name(path: &Path) -> Option<String> {
         let stem = path.file_stem()?.to_str()?.trim();
         let ticker = stem.split('_').next().unwrap_or(stem).trim();
@@ -61,25 +66,8 @@ impl SpreadScreener {
         out.sort_unstable_by(|a, b| a.0.cmp(&b.0));
         out
     }
-}
 
-#[derive(Debug)]
-struct SpreadSpec {
-    symbol: String,
-    option_type: OptionType,
-    expiry: NaiveDate,
-    short_strike: f64,
-    long_strike: f64,
-}
-
-impl ChainScreener for SpreadScreener {
-    fn screen(&self, option_chains_path: &Path) -> Vec<ScreenerCandidate> {
-        let Ok(chain) = OptionChainDb::new(option_chains_path, OptionsDbMode::Read)
-            .inspect_err(|err| eprintln!("screener: failed to open options db: {err}"))
-        else {
-            return Vec::new();
-        };
-
+    fn query_spreads(&self, chain: &OptionChainDb) -> Vec<SpreadSpec> {
         let mut spreads = Vec::new();
         for (option_type, query) in self.queries {
             let rows = match chain.query_map(query, |row| {
@@ -114,10 +102,17 @@ impl ChainScreener for SpreadScreener {
             }
         }
 
+        spreads
+    }
+
+    fn build_candidates(
+        &self,
+        option_chains_path: &Path,
+        mut spreads: Vec<SpreadSpec>,
+    ) -> Vec<ScreenerCandidate> {
         if spreads.is_empty() {
             return Vec::new();
         }
-
         spreads.sort_unstable_by(|a, b| a.symbol.cmp(&b.symbol));
 
         let json_index = Self::json_index(option_chains_path);
@@ -132,7 +127,6 @@ impl ChainScreener for SpreadScreener {
         let mut out = Vec::with_capacity(spreads.len());
         for symbol_spreads in spreads.chunk_by(|a, b| a.symbol == b.symbol) {
             let symbol = symbol_spreads[0].symbol.as_str();
-
             let Some(idx) = json_index
                 .binary_search_by(|(ticker, _)| ticker.as_str().cmp(symbol))
                 .ok()
@@ -181,6 +175,26 @@ impl ChainScreener for SpreadScreener {
         }
 
         out
+    }
+}
+
+#[derive(Debug)]
+struct SpreadSpec {
+    symbol: String,
+    option_type: OptionType,
+    expiry: NaiveDate,
+    short_strike: f64,
+    long_strike: f64,
+}
+
+impl ChainScreener for SpreadScreener {
+    fn screen(&self, option_chains_path: &Path) -> Vec<ScreenerCandidate> {
+        let Ok(chain) = OptionChainDb::new(option_chains_path, OptionsDbMode::Read)
+            .inspect_err(|err| eprintln!("screener: failed to open options db: {err}"))
+        else {
+            return Vec::new();
+        };
+        self.screen_db(&chain, option_chains_path)
     }
 }
 
@@ -292,6 +306,27 @@ mod tests {
             (put_pos.premium - (-2.275)).abs() < 1e-9,
             "unexpected put premium"
         );
+    }
+
+    #[test]
+    fn screen_db_uses_existing_db() {
+        let tmp = tempdir().expect("failed to create temp dir");
+        copy_arm_fixture(tmp.path());
+        let mut db = OptionChainDb::default_memory(
+            tmp.path()
+                .to_str()
+                .expect("temp directory path should be valid UTF-8"),
+        )
+        .expect("failed to create memory options db");
+        db.ingest_from_json()
+            .expect("failed to ingest fixture json into memory options db");
+
+        let screener = SpreadScreener::new(SINGLE_PUT_QUERY);
+        let out = screener.screen_db(&db, tmp.path());
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].ticker, "ARM");
+        assert_eq!(out[0].positions.len(), 1);
     }
 
     fn copy_arm_fixture(dst_dir: &Path) {

@@ -19,7 +19,7 @@ impl USMarketCalendar {
         let mut yearly_closes = Vec::with_capacity(capacity);
         for year in start_year..=end_year {
             let thanksgiving = Self::nth_weekday(year, 11, 3, 4);
-            holidays.push(vec![
+            let mut yearly_holidays = vec![
                 Self::observed(NaiveDate::from_ymd_opt(year, 1, 1).unwrap()), // New Year
                 Self::nth_weekday(year, 1, 0, 3),                             // MLK (3rd Mon Jan)
                 Self::nth_weekday(year, 2, 0, 3), // Presidents (3rd Mon Feb)
@@ -30,7 +30,12 @@ impl USMarketCalendar {
                 Self::nth_weekday(year, 9, 0, 1), // Labor (1st Mon Sep)
                 thanksgiving,                     // Thanksgiving (Thu)
                 Self::observed(NaiveDate::from_ymd_opt(year, 12, 25).unwrap()), // Christmas
-            ]);
+            ];
+            if year == 2025 {
+                // National Day of Mourning for President Jimmy Carter.
+                yearly_holidays.push(NaiveDate::from_ymd_opt(2025, 1, 9).unwrap());
+            }
+            holidays.push(yearly_holidays);
             yearly_closes.push(vec![
                 thanksgiving + Duration::days(1),               // Black Friday
                 NaiveDate::from_ymd_opt(year, 12, 24).unwrap(), // Christmas Eve
@@ -190,6 +195,7 @@ mod tests {
 
         let expected_2025 = vec![
             d("2025-01-01"),
+            d("2025-01-09"),
             d("2025-01-20"),
             d("2025-02-17"),
             d("2025-04-18"),

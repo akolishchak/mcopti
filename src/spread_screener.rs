@@ -27,7 +27,11 @@ impl SpreadScreener {
         Self { queries }
     }
 
-    pub fn screen_db(&self, chain: &OptionChainDb, option_chains_path: &Path) -> Vec<ScreenerCandidate> {
+    pub fn screen_db(
+        &self,
+        chain: &OptionChainDb,
+        option_chains_path: &Path,
+    ) -> Vec<ScreenerCandidate> {
         let spreads = self.query_spreads(chain);
         self.build_candidates(option_chains_path, spreads)
     }

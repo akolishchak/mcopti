@@ -310,11 +310,12 @@ impl MarketData {
             period1 -= 12 * 3600;
         }
 
+        let yahoo_ticker = ticker.replace('^', "%5E");
         let mut body = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(15))
             .build()
             .get(&format!(
-                "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+                "https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_ticker}"
             ))
             .query("period1", &period1.to_string())
             .query("period2", &end_ts_exclusive.to_string())

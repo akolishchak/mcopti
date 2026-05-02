@@ -1,7 +1,7 @@
 use chrono::{NaiveDate, Utc};
 use mcopti::{
-    Backtest, BacktestParameters, DEFAULT_CONFIG, MarketData, OptionChainDb,
-    spread_screener::SpreadScreener,
+    Backtest, BacktestExitParameters, BacktestParameters, DEFAULT_CONFIG, MarketData,
+    OptionChainDb, spread_screener::SpreadScreener,
 };
 use std::env;
 use std::error::Error;
@@ -60,10 +60,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         entry_barrier_ratio_threshold,
         ror_threshold,
     };
+    let exit_parameters = BacktestExitParameters {
+        pt: profit_take,
+        sl: stop_loss,
+    };
 
-    let backtest = Backtest::new(&[data_dir.to_path_buf()], profit_take, stop_loss)?;
+    let backtest = Backtest::new(&[data_dir.to_path_buf()])?;
     let screener = SpreadScreener::default();
-    backtest.run(screener, parameters)?;
+    backtest.run(screener, parameters, exit_parameters)?;
 
     Ok(())
 }

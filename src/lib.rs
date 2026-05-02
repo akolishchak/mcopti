@@ -24,7 +24,10 @@ pub mod vol_dynamics;
 pub mod volsurface;
 
 pub use {
-    backtest::{Backtest, BacktestParameters, BacktestSummary, ChainScreener, ScreenerCandidate},
+    backtest::{
+        Backtest, BacktestExitParameters, BacktestParameters, BacktestSummary, ChainScreener,
+        ScreenerCandidate,
+    },
     config::{Config, DEFAULT_CONFIG},
     context::Context,
     entry_barriers::EntryBarriers,

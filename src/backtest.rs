@@ -19,9 +19,16 @@ pub struct BacktestParameters {
     pub ror_threshold: f64,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct BacktestExitParameters {
+    pub pt: f64,
+    pub sl: f64,
+}
+
 #[derive(Clone, Debug)]
 pub struct BacktestSummary {
     pub parameters: BacktestParameters,
+    pub exit_parameters: BacktestExitParameters,
     pub closed_pnl: f64,
     pub max_drawdown: f64,
     pub open_positions: usize,
@@ -41,9 +48,8 @@ struct PreparedCandidate {
 
 struct Track {
     parameters: BacktestParameters,
+    exit_parameters: BacktestExitParameters,
     max_positions: usize,
-    profit_take: f64,
-    stop_loss: f64,
     open_positions: Vec<OpenPosition>,
     pnl: f64,
     pnl_peak: f64,
@@ -55,15 +61,13 @@ struct Track {
 impl Track {
     fn new(
         parameters: BacktestParameters,
+        exit_parameters: BacktestExitParameters,
         max_positions: usize,
-        profit_take: f64,
-        stop_loss: f64,
     ) -> Self {
         Self {
             parameters,
+            exit_parameters,
             max_positions,
-            profit_take,
-            stop_loss,
             open_positions: Vec::new(),
             pnl: 0.0,
             pnl_peak: 0.0,
@@ -135,8 +139,10 @@ impl Track {
             }
 
             let side = candidate.position.side();
-            let pt_mark = candidate.position.premium * (1.0 + self.profit_take.max(0.0) * side);
-            let sl_mark = candidate.position.premium * (1.0 - self.stop_loss.max(0.0) * side);
+            let pt_mark =
+                candidate.position.premium * (1.0 + self.exit_parameters.pt.max(0.0) * side);
+            let sl_mark =
+                candidate.position.premium * (1.0 - self.exit_parameters.sl.max(0.0) * side);
             if verbose {
                 println!(
                     "[OPEN ] {date} {} {{{}}} premium={:.4} ev={:.4} risk={:.4} ror={:.4} pt={:.4} sl={:.4}",
@@ -163,6 +169,7 @@ impl Track {
     fn summary(self) -> BacktestSummary {
         BacktestSummary {
             parameters: self.parameters,
+            exit_parameters: self.exit_parameters,
             closed_pnl: self.pnl,
             max_drawdown: self.max_drawdown,
             open_positions: self.open_positions.len(),
@@ -179,9 +186,6 @@ impl BacktestSummary {
 }
 
 pub struct Backtest {
-    // premium coefficients to enter/exit a trade
-    profit_take: f64,
-    stop_loss: f64,
     // data days
     days: Vec<PathBuf>,
     //
@@ -248,11 +252,7 @@ impl Error for BacktestError {
 }
 
 impl Backtest {
-    pub fn new(
-        data_paths: &[PathBuf],
-        profit_take: f64,
-        stop_loss: f64,
-    ) -> Result<Self, BacktestError> {
+    pub fn new(data_paths: &[PathBuf]) -> Result<Self, BacktestError> {
         let mut days = Vec::new();
         for data_path in data_paths {
             days.extend(
@@ -270,8 +270,6 @@ impl Backtest {
         days.sort_unstable_by(|a, b| a.file_name().cmp(&b.file_name()));
 
         Ok(Self {
-            profit_take,
-            stop_loss,
             days,
             max_positions: 2,
         })
@@ -281,9 +279,11 @@ impl Backtest {
         &self,
         generator: impl ChainScreener + Sync,
         parameters: BacktestParameters,
+        exit_parameters: BacktestExitParameters,
     ) -> Result<(), BacktestError> {
         let parameters = [parameters];
-        self.run_tracks(&generator, &parameters, true)?;
+        let exit_parameters = [exit_parameters];
+        self.run_tracks(&generator, &parameters, &exit_parameters, true)?;
         Ok(())
     }
 
@@ -291,22 +291,22 @@ impl Backtest {
         &self,
         generator: &(impl ChainScreener + Sync),
         parameters: &[BacktestParameters],
+        exit_parameters: &[BacktestExitParameters],
         verbose: bool,
     ) -> Result<Vec<BacktestSummary>, BacktestError> {
-        if parameters.is_empty() {
+        if parameters.is_empty() || exit_parameters.is_empty() {
             return Ok(Vec::new());
         }
 
-        let mut tracks: Vec<_> = parameters
+        let mut tracks_by_exit: Vec<Vec<_>> = exit_parameters
             .iter()
             .copied()
-            .map(|parameters| {
-                Track::new(
-                    parameters,
-                    self.max_positions,
-                    self.profit_take,
-                    self.stop_loss,
-                )
+            .map(|exit_parameters| {
+                parameters
+                    .iter()
+                    .copied()
+                    .map(|parameters| Track::new(parameters, exit_parameters, self.max_positions))
+                    .collect()
             })
             .collect();
         let jobs: Vec<_> = self
@@ -333,15 +333,21 @@ impl Backtest {
             )
             .unwrap();
             let chain = OptionChainDb::new(day, OptionsDbMode::Read)?;
-            let candidates = self.prepare_candidates(job);
+            let candidates_by_exit = self.prepare_candidates_by_exit(job, exit_parameters);
 
-            for track in &mut tracks {
-                track.update_open_positions(&chain, date, verbose)?;
-                track.open_positions(&candidates, date, verbose);
+            for (tracks, candidates) in tracks_by_exit.iter_mut().zip(candidates_by_exit.iter()) {
+                for track in tracks {
+                    track.update_open_positions(&chain, date, verbose)?;
+                    track.open_positions(candidates, date, verbose);
+                }
             }
         }
 
-        let mut summaries: Vec<_> = tracks.into_iter().map(Track::summary).collect();
+        let mut summaries: Vec<_> = tracks_by_exit
+            .into_iter()
+            .flatten()
+            .map(Track::summary)
+            .collect();
         summaries.sort_unstable_by(|a, b| {
             b.score()
                 .total_cmp(&a.score())
@@ -366,9 +372,11 @@ impl Backtest {
         if verbose {
             for summary in &summaries {
                 println!(
-                    "[SUMMARY] barrier_threshold={:.2} ror_threshold={:.2} closed_pnl={:.4} max_drawdown={:.4} open_positions={}, wins={}, losses={}",
+                    "[SUMMARY] barrier_threshold={:.2} ror_threshold={:.2} pt={:.2} sl={:.2} closed_pnl={:.4} max_drawdown={:.4} open_positions={}, wins={}, losses={}",
                     summary.parameters.entry_barrier_ratio_threshold,
                     summary.parameters.ror_threshold,
+                    summary.exit_parameters.pt,
+                    summary.exit_parameters.sl,
                     summary.closed_pnl,
                     summary.max_drawdown,
                     summary.open_positions,
@@ -381,11 +389,15 @@ impl Backtest {
         Ok(summaries)
     }
 
-    fn prepare_candidates(
+    fn prepare_candidates_by_exit(
         &self,
         job: Vec<(String, Context, LegUniverse)>,
-    ) -> Vec<PreparedCandidate> {
-        let mut candidates = Vec::with_capacity(job.len() * 5);
+        exit_parameters: &[BacktestExitParameters],
+    ) -> Vec<Vec<PreparedCandidate>> {
+        let mut candidates_by_exit: Vec<_> = exit_parameters
+            .iter()
+            .map(|_| Vec::with_capacity(job.len() * 5))
+            .collect();
         for (ticker, context, universe) in job {
             let ticker: Rc<str> = Rc::from(ticker);
             let Ok(scenario) = Scenario::new(&context, &universe)
@@ -403,26 +415,32 @@ impl Backtest {
             };
 
             for stat in stats {
-                let barrier_ratio = EntryBarriers::new(
-                    &context,
-                    &stat.position,
-                    &scenario,
-                    self.profit_take,
-                    self.stop_loss,
-                )
-                .ratio();
-                candidates.push(PreparedCandidate {
-                    ticker: Rc::clone(&ticker),
-                    position: stat.position,
-                    expected_value: stat.expected_value,
-                    risk: stat.risk,
-                    ror: stat.ror,
-                    barrier_ratio,
-                });
+                for (exit_parameters, candidates) in
+                    exit_parameters.iter().zip(candidates_by_exit.iter_mut())
+                {
+                    let barrier_ratio = EntryBarriers::new(
+                        &context,
+                        &stat.position,
+                        &scenario,
+                        exit_parameters.pt,
+                        exit_parameters.sl,
+                    )
+                    .ratio();
+                    candidates.push(PreparedCandidate {
+                        ticker: Rc::clone(&ticker),
+                        position: stat.position.clone(),
+                        expected_value: stat.expected_value,
+                        risk: stat.risk,
+                        ror: stat.ror,
+                        barrier_ratio,
+                    });
+                }
             }
         }
 
-        candidates.sort_unstable_by(|a, b| b.ror.total_cmp(&a.ror));
-        candidates
+        for candidates in &mut candidates_by_exit {
+            candidates.sort_unstable_by(|a, b| b.ror.total_cmp(&a.ror));
+        }
+        candidates_by_exit
     }
 }

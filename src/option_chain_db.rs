@@ -78,7 +78,7 @@ pub enum OptionChainDbError {
     Io(std::io::Error),
     Parse(OptionChainError),
     InvalidPayload(String),
-    DataNotFound,
+    DataNotFound(String),
 }
 
 pub type OptionChainDbResult<T> = std::result::Result<T, OptionChainDbError>;
@@ -90,7 +90,7 @@ impl Display for OptionChainDbError {
             Self::Io(err) => write!(f, "io error: {err}"),
             Self::Parse(err) => write!(f, "parse error: {err}"),
             Self::InvalidPayload(msg) => write!(f, "invalid payload: {msg}"),
-            Self::DataNotFound => write!(f, "expiration and/or strike not found"),
+            Self::DataNotFound(msg) => write!(f, "expiration and/or strike not found: {msg}"),
         }
     }
 }
@@ -102,7 +102,7 @@ impl StdError for OptionChainDbError {
             Self::Io(err) => Some(err),
             Self::Parse(err) => Some(err),
             Self::InvalidPayload(_) => None,
-            Self::DataNotFound => None,
+            Self::DataNotFound(_) => None,
         }
     }
 }
@@ -365,7 +365,11 @@ impl OptionChainDb {
         }
 
         if found != position.legs.len() {
-            return Err(OptionChainDbError::DataNotFound);
+            return Err(OptionChainDbError::DataNotFound(format!(
+                "symbol={symbol}, db={}, position={{{position}}}, found {found}/{} legs",
+                self.data_path.display(),
+                position.legs.len()
+            )));
         }
 
         Ok(sum)

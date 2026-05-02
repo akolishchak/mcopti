@@ -178,6 +178,38 @@ mod tests {
     }
 
     #[test]
+    fn parses_dash_numeric_fields_as_zero() {
+        let json = r#"
+        {
+            "date": "2025-09-08",
+            "last_price": "100.5",
+            "data": [{
+                "expiration": "2025-10-01",
+                "strike": "150",
+                "type": "call",
+                "last": "-",
+                "mark": "-",
+                "bid": "-",
+                "ask": "-",
+                "date": "2025-09-08",
+                "implied_volatility": "-",
+                "delta": "-",
+                "gamma": "-",
+                "theta": "-",
+                "vega": "-",
+                "rho": "-"
+            }]
+        }"#;
+
+        let chain: RawOptionChain = serde_json::from_str(json).unwrap();
+        let opt = &chain.data[0];
+        assert_eq!(opt.last, 0.0);
+        assert_eq!(opt.bid, 0.0);
+        assert_eq!(opt.ask, 0.0);
+        assert_eq!(opt.implied_volatility, 0.0);
+    }
+
+    #[test]
     fn parses_file() {
         let mut tmp = NamedTempFile::new().unwrap();
         let json = r#"{"date":"2025-09-08","last_price":101.0,"data":[]}"#;

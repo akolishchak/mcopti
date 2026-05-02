@@ -1,6 +1,6 @@
 //! Option math helpers including NCDF, Black-Scholes, and path simulation.
 
-use crate::OptionType;
+use crate::{OptionType, raw_option_chain::OptionContract};
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 use rand_xoshiro::Xoshiro256PlusPlus;
@@ -38,6 +38,100 @@ pub fn bs_price(option_type: OptionType, s: f64, k: f64, t: f64, sigma: f64) -> 
     match option_type {
         OptionType::Call => s * ncdf(d1) - k * ncdf(d2),
         OptionType::Put => k * ncdf(-d2) - s * ncdf(-d1),
+    }
+}
+
+pub fn bs_price_with_rate(
+    option_type: OptionType,
+    s: f64,
+    k: f64,
+    t: f64,
+    sigma: f64,
+    r: f64,
+    q: f64,
+) -> f64 {
+    let t = t.max(1e-12);
+    let sigma = sigma.max(1e-8);
+    let vs_t = sigma * t.sqrt();
+    let d1 = ((s / k).ln() + (r - q + 0.5 * sigma * sigma) * t) / vs_t;
+    let d2 = d1 - vs_t;
+    let df_r = (-r * t).exp();
+    let df_q = (-q * t).exp();
+
+    match option_type {
+        OptionType::Call => s * df_q * ncdf(d1) - k * df_r * ncdf(d2),
+        OptionType::Put => k * df_r * ncdf(-d2) - s * df_q * ncdf(-d1),
+    }
+}
+
+pub fn bs_delta_with_rate(
+    option_type: OptionType,
+    s: f64,
+    k: f64,
+    t: f64,
+    sigma: f64,
+    r: f64,
+    q: f64,
+) -> f64 {
+    let t = t.max(1e-12);
+    let sigma = sigma.max(1e-8);
+    let vs_t = sigma * t.sqrt();
+    let d1 = ((s / k).ln() + (r - q + 0.5 * sigma * sigma) * t) / vs_t;
+    let df_q = (-q * t).exp();
+
+    match option_type {
+        OptionType::Call => df_q * ncdf(d1),
+        OptionType::Put => df_q * (ncdf(d1) - 1.0),
+    }
+}
+
+pub fn implied_volatility_with_rate(
+    option_type: OptionType,
+    price: f64,
+    s: f64,
+    k: f64,
+    t: f64,
+    r: f64,
+    q: f64,
+) -> Option<f64> {
+    if price <= 0.0 || t < 0.0 {
+        return None;
+    }
+
+    let mut lo = 1e-6;
+    let mut hi = 5.0;
+    let price_lo = bs_price_with_rate(option_type, s, k, t, lo, r, q);
+    let price_hi = bs_price_with_rate(option_type, s, k, t, hi, r, q);
+    if price < price_lo - 1e-8 || price > price_hi + 1e-8 {
+        return None;
+    }
+
+    for _ in 0..24 {
+        let mid = 0.5 * (lo + hi);
+        if bs_price_with_rate(option_type, s, k, t, mid, r, q) < price {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+
+    Some(0.5 * (lo + hi))
+}
+
+pub fn update_iv_delta_with_rate(contract: &mut OptionContract, spot: f64, r: f64, q: f64) {
+    let t = (contract.expiration - contract.date).num_days() as f64 / 365.0;
+    if let Some(iv) = implied_volatility_with_rate(
+        contract.option_type,
+        contract.mark,
+        spot,
+        contract.strike,
+        t,
+        r,
+        q,
+    ) {
+        contract.implied_volatility = iv;
+        contract.delta =
+            bs_delta_with_rate(contract.option_type, spot, contract.strike, t, iv, r, q);
     }
 }
 
@@ -144,6 +238,18 @@ mod tests {
                 "bs_price({option_type:?}, {s}, {k}, {t}, {sigma}) expected {expected}, got {got}"
             );
         }
+    }
+
+    #[test]
+    fn implied_vol_with_rate_recovers_input() {
+        let price = bs_price_with_rate(OptionType::Call, 100.0, 105.0, 0.5, 0.24, 0.04, 0.0);
+        let iv =
+            implied_volatility_with_rate(OptionType::Call, price, 100.0, 105.0, 0.5, 0.04, 0.0)
+                .unwrap();
+        assert!(approx_eq(iv, 0.24, 1e-6), "expected 0.24, got {iv}");
+
+        let delta = bs_delta_with_rate(OptionType::Put, 100.0, 95.0, 0.5, 0.24, 0.04, 0.0);
+        assert!(delta < 0.0);
     }
 
     #[test]

@@ -13,6 +13,8 @@ pub struct RawOptionChain {
     pub date: NaiveDate,
     #[serde(deserialize_with = "de_f64")]
     pub last_price: f64,
+    #[serde(default, deserialize_with = "de_f64")]
+    pub risk_free_rate: f64,
     #[serde(default)]
     pub data: Vec<OptionContract>,
 }

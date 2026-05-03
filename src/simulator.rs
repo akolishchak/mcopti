@@ -1,7 +1,7 @@
 //! Price legs and positions along simulated scenario paths.
 
 use crate::{
-    Context, LegUniverse, OptionType, Position, Scenario, bs_price, interp_linear_kgrid,
+    Context, LegUniverse, OptionType, Position, Scenario, bs_price_with_rate, interp_linear_kgrid,
     linspace_vec,
 };
 use rayon::prelude::*;
@@ -125,6 +125,7 @@ impl Simulator {
         let steps = scenario.tau_driver.len();
         let leg_count = universe.legs.len();
         let max_expire = universe.max_expire;
+        let r = context.risk_free_rate;
         let positions_idx = &universe.positions_idx;
         let pos_count = positions_idx.len();
         let ln_strike: Vec<f64> = universe.legs.iter().map(|leg| leg.strike.ln()).collect();
@@ -243,8 +244,15 @@ impl Simulator {
                                         let w = interp_linear_kgrid(k, w_row);
                                         let iv = (w / tau).sqrt();
                                         // mark-to-market the leg using slice-specific rows and path price.
-                                        leg_marks[leg_idx] =
-                                            bs_price(leg.option_type, s, leg.strike, tau, iv);
+                                        leg_marks[leg_idx] = bs_price_with_rate(
+                                            leg.option_type,
+                                            s,
+                                            leg.strike,
+                                            tau,
+                                            iv,
+                                            r,
+                                            0.0,
+                                        );
 
                                         // safe to advance: each slice covers a disjoint, ordered range of legs.
                                         leg_idx += 1;
@@ -455,7 +463,8 @@ mod tests {
 
     #[test]
     fn run_pre_expiry_matches_manual_surface_pricing() {
-        let context = load_context();
+        let mut context = load_context();
+        context.risk_free_rate = 0.04;
         let expiry = NaiveDate::from_ymd_opt(2025, 9, 12).unwrap();
         let builder = LegBuilder::new(&context);
         let call = builder
@@ -494,13 +503,29 @@ mod tests {
         let w_call =
             interp_linear_kgrid(k_call, &context.vol_surface.row(OptionType::Call, tau)) * scale;
         let iv_call = (w_call / tau).sqrt();
-        let call_mark = bs_price(OptionType::Call, s, call.strike, tau, iv_call);
+        let call_mark = bs_price_with_rate(
+            OptionType::Call,
+            s,
+            call.strike,
+            tau,
+            iv_call,
+            context.risk_free_rate,
+            0.0,
+        );
 
         let k_put = put.strike.ln() - s.ln();
         let w_put =
             interp_linear_kgrid(k_put, &context.vol_surface.row(OptionType::Put, tau)) * scale;
         let iv_put = (w_put / tau).sqrt();
-        let put_mark = bs_price(OptionType::Put, s, put.strike, tau, iv_put);
+        let put_mark = bs_price_with_rate(
+            OptionType::Put,
+            s,
+            put.strike,
+            tau,
+            iv_put,
+            context.risk_free_rate,
+            0.0,
+        );
 
         let total_mark = call_mark + put_mark;
         let expected_value = total_mark - premium;

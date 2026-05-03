@@ -1,6 +1,6 @@
 //! Entry-time mark inversion for deriving win/loss spot barriers.
 
-use crate::{Context, OptionType, Position, Scenario, bs_price, interp_linear_kgrid};
+use crate::{Context, OptionType, Position, Scenario, bs_price_with_rate, interp_linear_kgrid};
 use std::borrow::Cow;
 
 const EPSILON: f64 = 1e-8;
@@ -55,8 +55,10 @@ impl EntryBarriers {
         let mark_win = premium * (1.0 + profit_take.max(0.0) * side);
         let mark_loss = premium * (1.0 - stop_loss.max(0.0) * side);
 
-        let s_win = Self::find_s_for_mark(|s| Self::mark_at_spot(&leg_inputs, s), mark_win, s0);
-        let s_loss = Self::find_s_for_mark(|s| Self::mark_at_spot(&leg_inputs, s), mark_loss, s0);
+        let r = context.risk_free_rate;
+        let s_win = Self::find_s_for_mark(|s| Self::mark_at_spot(&leg_inputs, s, r), mark_win, s0);
+        let s_loss =
+            Self::find_s_for_mark(|s| Self::mark_at_spot(&leg_inputs, s, r), mark_loss, s0);
 
         // Compute sigT to this position's expiry inside the global (universe-max) scenario.
         // Same alignment idea as simulator: tau_to_pos = tau_max - tau_offset, where
@@ -133,7 +135,7 @@ impl EntryBarriers {
             .collect()
     }
 
-    fn mark_at_spot(inputs: &[LegEvalInput<'_>], s: f64) -> f64 {
+    fn mark_at_spot(inputs: &[LegEvalInput<'_>], s: f64, r: f64) -> f64 {
         let s = s.max(EPSILON);
         let ln_s = s.ln();
         let mut mark = 0.0;
@@ -142,7 +144,7 @@ impl EntryBarriers {
             let k = leg.ln_strike - ln_s;
             let w = interp_linear_kgrid(k, leg.w_row.as_ref());
             let iv = (w.max(1e-12) * leg.inv_tau).sqrt();
-            let leg_mark = bs_price(leg.option_type, s, leg.strike, leg.tau, iv);
+            let leg_mark = bs_price_with_rate(leg.option_type, s, leg.strike, leg.tau, iv, r, 0.0);
             mark += leg.qty * leg_mark;
         }
 

@@ -206,6 +206,7 @@ mod tests {
         let raw = RawOptionChain {
             date: trade_date,
             last_price: 100.0,
+            risk_free_rate: 0.0,
             data: vec![
                 mk_contract(
                     trade_date,
@@ -271,6 +272,7 @@ mod tests {
         let raw = RawOptionChain {
             date: trade_date,
             last_price: 100.0,
+            risk_free_rate: 0.0,
             data: vec![
                 mk_contract(
                     trade_date,

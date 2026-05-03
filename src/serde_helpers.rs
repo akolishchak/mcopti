@@ -31,6 +31,9 @@ where
         where
             E: DeError,
         {
+            if value.trim() == "-" {
+                return Ok(0.0);
+            }
             value.parse::<f64>().map_err(DeError::custom)
         }
 

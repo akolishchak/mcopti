@@ -9,6 +9,7 @@ pub struct Context {
     pub vol_surface: VolSurface,
     pub calendar: MarketCalendar,
     pub config: Config,
+    pub risk_free_rate: f64,
 }
 
 impl Context {
@@ -24,6 +25,7 @@ impl Context {
             vol_surface,
             calendar,
             config: DEFAULT_CONFIG,
+            risk_free_rate: raw_option_chain.risk_free_rate,
         }
     }
 }

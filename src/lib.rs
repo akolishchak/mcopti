@@ -39,7 +39,7 @@ pub use {
     open_position::{Metrics, OpenPosition},
     option_chain::{OptionChain, OptionChainSide},
     option_chain_db::{OptionChainDb, OptionChainDbError, OptionsDbMode},
-    option_math::{bs_price, ncdf, simulate_paths},
+    option_math::{bs_price, bs_price_with_rate, ncdf, simulate_paths},
     pchip::Pchip,
     position::Position,
     raw_option_chain::{OptionType, RawOptionChain},

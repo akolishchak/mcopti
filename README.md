@@ -5,21 +5,28 @@ It supports any strategy you can express as a combination of option legs
 on the same underlying. You choose the contracts and the quantities to
 buy or sell.
 
-The inputs are an option chain, historical prices for the underlying, and
-the position you want to evaluate. Using that market data, the engine
-simulates possible movements of the underlying and tracks the position's
-value as prices change and time passes, from entry through expiration.
+**Inputs**
 
-The result for each position gives its expected profit or loss at expiration
-and its simulated risk: the largest loss relative to entry observed along
-any simulated path. It also reports expected profit or loss divided by that
-risk, expressing the expected return relative to the losses encountered
-while holding the position.
+- **Option chain:** current option quotes for the underlying.
+- **Historical prices:** the underlying's price history.
+- **Position:** the strategy's option legs and quantities.
 
-The example below loads market data, builds a position from its legs, and
-runs an evaluation. A fixed random seed makes the simulated market movements
-reproducible. The pricing and simulation components can also be used
-independently in your own analysis.
+Using these inputs, the engine simulates possible movements of the underlying
+and tracks the position's value as prices change and time passes, from entry
+through expiration.
+
+**Outputs for each position**
+
+- **Expected P&L:** average profit or loss at expiration.
+- **Simulated risk:** the largest loss relative to entry observed along any
+  simulated path.
+- **Return/risk:** expected P&L divided by simulated risk, expressing the expected
+  return relative to the losses encountered while holding the position.
+
+A fixed random seed makes the simulated market movements reproducible.
+The pricing and simulation components can also be used independently in your
+own analysis. The example below loads market data, builds a position from its
+legs, and runs a complete evaluation.
 
 ## Example: a call credit spread
 
@@ -27,7 +34,7 @@ Sell one ARM call at strike 150 and buy one at strike 155, both expiring
 September 12, 2025. The example uses the repository's JSON fixture and
 10,000 simulation paths.
 
-First, prepare price history from the repository root. `Scenario::new`
+First, prepare price history from the repository root. [Scenario::new]
 reads `data/market_data_1d.db` relative to the working directory:
 
 ```sh
@@ -80,8 +87,8 @@ cargo run --example getting_started
 
 ### Volatility surface
 
-`VolSurface` builds separate call and put surfaces from the option chain's
-implied volatilities. It uses shape-preserving PCHIP interpolation in
+[VolSurface] builds separate call and put surfaces from the option chain's
+implied volatilities. It uses shape-preserving [PCHIP] interpolation in
 log-moneyness (`ln(strike / spot)`) and time to expiry, working in total
 variance (`IV² × time to expiry`). A tapered adjustment blends toward
 nondecreasing total variance across maturities while preserving the fitted
@@ -91,7 +98,7 @@ speeds repeated volatility queries.
 
 ### Price paths
 
-`Scenario` generates Monte Carlo paths using **geometric Brownian motion
+[Scenario] generates Monte Carlo paths using **geometric Brownian motion
 (GBM) with time-varying volatility**, a lognormal model for the underlying
 price. Drift is fitted to historical prices, and current implied volatility
 is scaled using historical realized volatility. Volatility varies over time
@@ -103,7 +110,7 @@ overnight gaps.
 
 ### Option valuation
 
-At each step, `Simulator` calculates Black–Scholes option prices from the
+At each step, [Simulator] calculates Black–Scholes option prices from the
 simulated spot, remaining time to expiry, and implied volatility read from
 the surface at that spot. This repricing captures the effects of changes in
 price, time, and modeled volatility on each leg's value. Pricing uses the
@@ -117,18 +124,18 @@ Common types and functions are re-exported at the crate root.
 
 | Task | API |
 | --- | --- |
-| Load an option snapshot and settings | `RawOptionChain` → `Context` |
-| Build and group positions | `LegBuilder` → `Position` → `LegUniverse` |
-| Generate spot paths and price positions | `Scenario` → `Simulator` |
-| Screen and backtest historical snapshots | `SpreadScreener` → `Backtest` |
+| Load an option snapshot and settings | [RawOptionChain] → [Context] |
+| Build and group positions | [LegBuilder] → [Position] → [LegUniverse] |
+| Generate spot paths and price positions | [Scenario] → [Simulator] |
+| Screen and backtest historical snapshots | [SpreadScreener] → [Backtest] |
 
-- `VolSurface::row` returns total variance across a fixed log-moneyness grid;
-  `VolSurface::iv` returns implied volatility.
-- `Simulator::run` returns `Result<Vec<SimulationStats>, SimulatorError>`,
-  one result per position in input order. Each result contains the original
+- [VolSurface::row] returns total variance across a fixed log-moneyness grid;
+  [VolSurface::iv] returns implied volatility.
+- [Simulator::run] returns `Result<Vec<SimulationStats>, SimulatorError>`,
+  one result per position in input order. Each [SimulationStats] contains the original
   `position`, expected P&L (`expected_value`), the largest simulated loss from
   entry (`risk`), and expected P&L divided by risk (`ror`).
-- `EntryBarriers::new` computes entry barrier z-scores (`z_win`, `z_loss`) from
+- [EntryBarriers::new] computes entry barrier z-scores (`z_win`, `z_loss`) from
   target mark inversion and scenario volatility scaling.
 
 ## Units
@@ -142,9 +149,9 @@ Common types and functions are re-exported at the crate root.
 
 - Option chain input should be grouped by expiration and sorted by strike within each
   expiry; the bucketing and binary search assume ordered data.
-- `Scenario::new`, `MarketData::default_read`, and `HistoricalVolatility` read a SQLite DB at
+- [Scenario::new], [MarketData::default_read], and [HistoricalVolatility] read a SQLite DB at
   `data/market_data_1d.db` with a `candles` table containing the columns listed in
-  `src/market_data.rs`. The `data/` directory is gitignored.
+  [src/market_data.rs](src/market_data.rs). The `data/` directory is gitignored.
 
 For library use, create and populate the database using the existing methods before
 constructing a scenario:
@@ -227,17 +234,18 @@ cargo run --release --bin backtest_spreads -- <data_dir> [profit_take] [stop_los
 
 ## Module map
 
-- `src/raw_option_chain.rs`: parse option chain JSON into typed structs.
-- `src/option_chain.rs`: bucket quotes by expiry and side, expose per-expiry slices.
-- `src/volsurface.rs`: build a total-variance surface with a maturity adjustment
+- [src/raw_option_chain.rs](src/raw_option_chain.rs): parse option chain JSON into typed structs.
+- [src/option_chain.rs](src/option_chain.rs): bucket quotes by expiry and side, expose per-expiry slices.
+- [src/volsurface.rs](src/volsurface.rs): build a total-variance surface with a maturity adjustment
   toward nondecreasing variance, and query IV or slopes.
-- `src/market_calendar.rs`: US trading calendar and session times.
-- `src/market_data.rs`: SQLite market data access.
-- `src/historical_volatility.rs`: realized vol estimates from market data.
-- `src/scenario.rs`: build time grids, vol multipliers, and Monte Carlo price paths.
-- `src/leg.rs`, `src/position.rs`, `src/leg_universe.rs`: multi-leg position structures.
-- `src/simulator.rs`: price legs and positions across scenario paths.
-- `src/entry_barriers.rs`: invert target marks to implied spot barriers and z-scores.
+- [src/market_calendar.rs](src/market_calendar.rs): US trading calendar and session times.
+- [src/market_data.rs](src/market_data.rs): SQLite market data access.
+- [src/historical_volatility.rs](src/historical_volatility.rs): realized vol estimates from market data.
+- [src/scenario.rs](src/scenario.rs): build time grids, vol multipliers, and Monte Carlo price paths.
+- [src/leg.rs](src/leg.rs), [src/position.rs](src/position.rs),
+  [src/leg_universe.rs](src/leg_universe.rs): multi-leg position structures.
+- [src/simulator.rs](src/simulator.rs): price legs and positions across scenario paths.
+- [src/entry_barriers.rs](src/entry_barriers.rs): invert target marks to implied spot barriers and z-scores.
 
 ## Tests
 
@@ -265,3 +273,23 @@ cargo bench --bench scenario_bench
 cargo bench --bench simulator_bench
 cargo bench --bench barriers_bench
 ```
+
+[RawOptionChain]: https://docs.rs/mcopti/latest/mcopti/struct.RawOptionChain.html
+[Context]: https://docs.rs/mcopti/latest/mcopti/struct.Context.html
+[LegBuilder]: https://docs.rs/mcopti/latest/mcopti/struct.LegBuilder.html
+[Position]: https://docs.rs/mcopti/latest/mcopti/struct.Position.html
+[LegUniverse]: https://docs.rs/mcopti/latest/mcopti/struct.LegUniverse.html
+[Scenario]: https://docs.rs/mcopti/latest/mcopti/struct.Scenario.html
+[Scenario::new]: https://docs.rs/mcopti/latest/mcopti/struct.Scenario.html#method.new
+[Simulator]: https://docs.rs/mcopti/latest/mcopti/struct.Simulator.html
+[Simulator::run]: https://docs.rs/mcopti/latest/mcopti/struct.Simulator.html#method.run
+[SimulationStats]: https://docs.rs/mcopti/latest/mcopti/simulator/struct.SimulationStats.html
+[SpreadScreener]: https://docs.rs/mcopti/latest/mcopti/struct.SpreadScreener.html
+[Backtest]: https://docs.rs/mcopti/latest/mcopti/struct.Backtest.html
+[VolSurface]: https://docs.rs/mcopti/latest/mcopti/struct.VolSurface.html
+[VolSurface::row]: https://docs.rs/mcopti/latest/mcopti/struct.VolSurface.html#method.row
+[VolSurface::iv]: https://docs.rs/mcopti/latest/mcopti/struct.VolSurface.html#method.iv
+[PCHIP]: https://docs.rs/mcopti/latest/mcopti/struct.Pchip.html
+[EntryBarriers::new]: https://docs.rs/mcopti/latest/mcopti/struct.EntryBarriers.html#method.new
+[MarketData::default_read]: https://docs.rs/mcopti/latest/mcopti/struct.MarketData.html#method.default_read
+[HistoricalVolatility]: https://docs.rs/mcopti/latest/mcopti/struct.HistoricalVolatility.html

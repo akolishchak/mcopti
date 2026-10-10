@@ -4,29 +4,49 @@ use chrono::NaiveDate;
 
 use crate::{Leg, OptionType, Position};
 
+/// Deduplicated contracts and position indexes used for batch pricing.
+///
+/// Positions that share a contract refer to the same unique leg, allowing
+/// [`crate::Simulator`] to reuse its price at each simulated path step.
 pub struct LegUniverse {
+    /// Unique legs sorted by expiry index, option type, and strike.
     pub legs: Vec<Leg>,
+    /// Latest leg expiry, or [`NaiveDate::MIN`] when there are no legs.
     pub max_expire: NaiveDate,
+    /// Whether any position contains a call.
     pub call_present: bool,
+    /// Whether any position contains a put.
     pub put_present: bool,
+    /// Per-position `(leg index, signed quantity)` pairs indexing [`Self::legs`].
     pub positions_idx: Vec<Vec<(usize, i64)>>,
+    /// Original positions in their input order.
     pub positions: Vec<Position>,
     type_range: Vec<(usize, usize)>,
     expiry_range: Vec<(usize, usize)>,
 }
 
+/// Legs sharing an expiry index and option type.
 pub struct LegUniverseTypeSlice<'a> {
+    /// Option type shared by the slice.
     pub option_type: OptionType,
+    /// Expiry index shared by the slice.
     pub expire_id: usize,
+    /// Borrowed legs in the group, in universe order.
     pub legs: &'a [Leg],
 }
 
+/// Legs sharing an expiry index.
 pub struct LegUniverseExpirySlice<'a> {
+    /// Expiry index shared by the slice.
     pub expire_id: usize,
+    /// Borrowed legs in the group, in universe order.
     pub legs: &'a [Leg],
 }
 
 impl LegUniverse {
+    /// Deduplicate legs and build indexes while preserving position order.
+    ///
+    /// Legs must use consistent expiry indexes from the same option chain.
     pub fn from_positions(positions: Vec<Position>) -> Self {
         let capacity = positions.iter().map(|p| p.legs.len()).sum();
         let mut legs: Vec<Leg> = Vec::with_capacity(capacity);
@@ -110,6 +130,7 @@ impl LegUniverse {
         }
     }
 
+    /// Iterate over groups sharing an expiry index and option type.
     pub fn type_slices(&self) -> impl Iterator<Item = LegUniverseTypeSlice<'_>> {
         self.type_range
             .iter()
@@ -120,6 +141,7 @@ impl LegUniverse {
             })
     }
 
+    /// Iterate over groups sharing an expiry index.
     pub fn expiry_slices(&self) -> impl Iterator<Item = LegUniverseExpirySlice<'_>> {
         self.expiry_range
             .iter()
@@ -129,6 +151,7 @@ impl LegUniverse {
             })
     }
 
+    /// Return the number of distinct expiry index groups.
     pub fn expiries(&self) -> usize {
         self.expiry_range.len()
     }

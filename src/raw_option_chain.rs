@@ -10,11 +10,15 @@ use std::path::Path;
 /// Root option chain payload.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct RawOptionChain {
+    /// Snapshot date.
     pub date: NaiveDate,
+    /// Underlying spot price at the snapshot.
     #[serde(deserialize_with = "de_f64")]
     pub last_price: f64,
+    /// Annual continuously compounded risk-free rate as a decimal; defaults to zero.
     #[serde(default, deserialize_with = "de_f64")]
     pub risk_free_rate: f64,
+    /// Contract quotes; defaults to an empty list.
     #[serde(default)]
     pub data: Vec<OptionContract>,
 }
@@ -25,38 +29,56 @@ pub struct OptionContract {
     // #[serde(rename = "contractID")]
     // pub contract_id: String,
     // pub symbol: String,
+    /// Contract expiration date.
     pub expiration: NaiveDate,
+    /// Contract strike price.
     #[serde(deserialize_with = "de_f64")]
     pub strike: f64,
+    /// Call or put, serialized under the JSON key `type`.
     #[serde(rename = "type")]
     pub option_type: OptionType,
+    /// Last traded option price.
     #[serde(deserialize_with = "de_f64")]
     pub last: f64,
+    /// Option mark reported by the source.
     #[serde(deserialize_with = "de_f64")]
     pub mark: f64,
+    /// Best bid price.
     #[serde(deserialize_with = "de_f64")]
     pub bid: f64,
+    /// Size at the best bid; defaults to zero.
     #[serde(default, deserialize_with = "de_f64")]
     pub bid_size: f64,
+    /// Best ask price; defaults to zero.
     #[serde(default, deserialize_with = "de_f64")]
     pub ask: f64,
+    /// Size at the best ask; defaults to zero.
     #[serde(default, deserialize_with = "de_f64")]
     pub ask_size: f64,
+    /// Reported trading volume; defaults to zero.
     #[serde(default, deserialize_with = "de_f64")]
     pub volume: f64,
+    /// Reported open interest; defaults to zero.
     #[serde(default, deserialize_with = "de_f64")]
     pub open_interest: f64,
+    /// Quote date reported by the source.
     pub date: NaiveDate,
+    /// Annual implied volatility as a decimal.
     #[serde(deserialize_with = "de_f64")]
     pub implied_volatility: f64,
+    /// Delta reported by the source.
     #[serde(deserialize_with = "de_f64")]
     pub delta: f64,
+    /// Gamma reported by the source.
     #[serde(deserialize_with = "de_f64")]
     pub gamma: f64,
+    /// Theta reported by the source.
     #[serde(deserialize_with = "de_f64")]
     pub theta: f64,
+    /// Vega reported by the source.
     #[serde(deserialize_with = "de_f64")]
     pub vega: f64,
+    /// Rho reported by the source.
     #[serde(deserialize_with = "de_f64")]
     pub rho: f64,
     // #[serde(default, deserialize_with = "de_f64")]
@@ -65,17 +87,22 @@ pub struct OptionContract {
     // pub intrinsic_value: f64,
 }
 
+/// Option payoff type, serialized as `"call"` or `"put"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OptionType {
+    /// Right to buy the underlying at the strike.
     Call,
+    /// Right to sell the underlying at the strike.
     Put,
 }
 
 /// Errors encountered while parsing filenames or JSON payloads.
 #[derive(Debug)]
 pub enum OptionChainError {
+    /// The file could not be read.
     Io(std::io::Error),
+    /// The JSON payload could not be deserialized.
     Json(serde_json::Error),
 }
 
@@ -115,6 +142,10 @@ impl From<serde_json::Error> for OptionChainError {
 ///
 /// Eagerly reads into memory and uses `from_slice` for speed.
 /// Fails if required numeric fields are missing/empty (see `de_f64`).
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or its contents do not match [`RawOptionChain`].
 pub fn parse_option_chain_file(path: impl AsRef<Path>) -> Result<RawOptionChain, OptionChainError> {
     let buf = std::fs::read(path)?;
     let chain: RawOptionChain = serde_json::from_slice(&buf)?;
@@ -124,6 +155,10 @@ pub fn parse_option_chain_file(path: impl AsRef<Path>) -> Result<RawOptionChain,
 /// Deserialize a chain from any reader (useful for testing).
 ///
 /// Streaming variant; otherwise identical to `parse_option_chain_file`.
+///
+/// # Errors
+///
+/// Returns an error on a read failure or a payload that does not match [`RawOptionChain`].
 pub fn parse_option_chain_reader<R: std::io::Read>(
     reader: R,
 ) -> Result<RawOptionChain, serde_json::Error> {

@@ -1,6 +1,8 @@
+//! Screen historical option snapshots and track positions across trading dates.
+
 use crate::{
     Context, EntryBarriers, LegUniverse, OpenPosition, OptionChainDb, OptionChainDbError,
-    OptionsDbMode, Position, RawOptionChain, Scenario, Simulator,
+    OptionsDbMode, Position, RawOptionChain, Scenario, Simulator, VolSurfaceError,
 };
 
 use chrono::NaiveDate;
@@ -13,26 +15,40 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+/// Minimum entry criteria for a backtest track.
 #[derive(Clone, Copy, Debug)]
 pub struct BacktestParameters {
+    /// Minimum stop-loss barrier distance divided by profit-taking barrier distance.
     pub entry_barrier_ratio_threshold: f64,
+    /// Minimum expected value divided by simulated risk.
     pub ror_threshold: f64,
 }
 
+/// Exit targets expressed as fractions of the absolute entry premium.
 #[derive(Clone, Copy, Debug)]
 pub struct BacktestExitParameters {
+    /// Profit-taking fraction; `0.5` targets a gain of half the entry premium magnitude.
     pub pt: f64,
+    /// Stop-loss fraction; `0.5` allows a loss of half the entry premium magnitude.
     pub sl: f64,
 }
 
+/// Results for one entry/exit parameter combination, without a contract multiplier.
 #[derive(Clone, Debug)]
 pub struct BacktestSummary {
+    /// Entry criteria used by this track.
     pub parameters: BacktestParameters,
+    /// Exit targets used by this track.
     pub exit_parameters: BacktestExitParameters,
+    /// Sum of realized P&L for closed positions.
     pub closed_pnl: f64,
+    /// Largest peak-to-trough drop in cumulative realized P&L, as a nonnegative amount.
     pub max_drawdown: f64,
+    /// Number of positions still open after the final snapshot.
     pub open_positions: usize,
+    /// Closed positions whose P&L has a positive sign, including positive zero.
     pub wins: usize,
+    /// Closed positions whose P&L has a negative sign, including negative zero.
     pub losses: usize,
 }
 
@@ -180,11 +196,13 @@ impl Track {
 }
 
 impl BacktestSummary {
+    /// Return realized P&L minus maximum drawdown.
     pub fn score(&self) -> f64 {
         self.closed_pnl - self.max_drawdown
     }
 }
 
+/// Backtest runner over dated snapshot directories, opening up to two candidates per day.
 pub struct Backtest {
     // data days
     days: Vec<PathBuf>,
@@ -192,13 +210,18 @@ pub struct Backtest {
     max_positions: usize,
 }
 
+/// A ticker, its raw snapshot, and positions proposed by a screener.
 pub struct ScreenerCandidate {
+    /// Underlying ticker for the snapshot and positions.
     pub ticker: String,
+    /// Option snapshot used to build candidate legs.
     pub raw_chain: RawOptionChain,
+    /// Candidate positions to evaluate.
     pub positions: Vec<Position>,
 }
 
 impl ScreenerCandidate {
+    /// Bundle a snapshot and its candidate positions.
     pub fn new(ticker: String, raw_chain: RawOptionChain, positions: Vec<Position>) -> Self {
         Self {
             ticker,
@@ -208,15 +231,23 @@ impl ScreenerCandidate {
     }
 }
 
+/// Provide candidate positions from one dated option snapshot directory.
 pub trait ChainScreener {
+    /// Read one snapshot directory and return candidate positions grouped by ticker.
     fn screen(&self, option_chains_path: &Path) -> Vec<ScreenerCandidate>;
 }
 
+/// Failure to read snapshots, mark positions, or construct a volatility surface.
 #[derive(Debug)]
 pub enum BacktestError {
+    /// A data directory could not be read.
     Io(io::Error),
+    /// An option database operation failed.
     Db(OptionChainDbError),
+    /// No snapshot subdirectories were found.
     NoData,
+    /// A candidate snapshot could not form a valid volatility surface.
+    VolSurface(VolSurfaceError),
 }
 
 impl From<io::Error> for BacktestError {
@@ -231,12 +262,19 @@ impl From<crate::option_chain_db::OptionChainDbError> for BacktestError {
     }
 }
 
+impl From<VolSurfaceError> for BacktestError {
+    fn from(value: VolSurfaceError) -> Self {
+        Self::VolSurface(value)
+    }
+}
+
 impl Display for BacktestError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(e) => write!(f, "file error: {e}"),
             Self::Db(e) => write!(f, "db error: {e}"),
             Self::NoData => write!(f, "no input data found"),
+            Self::VolSurface(e) => write!(f, "{e}"),
         }
     }
 }
@@ -247,11 +285,19 @@ impl Error for BacktestError {
             Self::Io(e) => Some(e),
             Self::Db(e) => Some(e),
             Self::NoData => None,
+            Self::VolSurface(e) => Some(e),
         }
     }
 }
 
 impl Backtest {
+    /// Collect immediate snapshot subdirectories from the supplied roots, sorted by name.
+    ///
+    /// Each subdirectory must be named `YYYY-MM-DD` and contain a prepared `options.db`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a root cannot be read or no snapshot directories are found.
     pub fn new(data_paths: &[PathBuf]) -> Result<Self, BacktestError> {
         let mut days = Vec::new();
         for data_path in data_paths {
@@ -275,6 +321,15 @@ impl Backtest {
         })
     }
 
+    /// Run one parameter combination and print position activity and its summary.
+    ///
+    /// # Errors
+    ///
+    /// Returns errors from [`Self::run_tracks`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if a snapshot directory name is not a valid `YYYY-MM-DD` date.
     pub fn run(
         &self,
         generator: impl ChainScreener + Sync,
@@ -287,6 +342,18 @@ impl Backtest {
         Ok(())
     }
 
+    /// Run every entry/exit parameter combination and return summaries sorted by descending score.
+    ///
+    /// Empty parameter lists return no summaries. `verbose` prints track activity;
+    /// candidate screening or simulation failures can still be reported to stderr.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a snapshot database, position mark, or candidate surface is invalid.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a snapshot directory name is not a valid `YYYY-MM-DD` date.
     pub fn run_tracks(
         &self,
         generator: &(impl ChainScreener + Sync),
@@ -318,13 +385,14 @@ impl Backtest {
                     .into_iter()
                     .map(|candidate| {
                         let ticker = candidate.ticker;
-                        let context = Context::from_raw_option_chain(&ticker, &candidate.raw_chain);
+                        let context =
+                            Context::from_raw_option_chain(&ticker, &candidate.raw_chain)?;
                         let universe = LegUniverse::from_positions(candidate.positions);
-                        (ticker, context, universe)
+                        Ok((ticker, context, universe))
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Result<Vec<_>, BacktestError>>()
             })
-            .collect();
+            .collect::<Result<_, BacktestError>>()?;
 
         for (day, job) in self.days.iter().zip(jobs) {
             let date = NaiveDate::parse_from_str(

@@ -1,3 +1,5 @@
+//! Build vertical spread candidates from SQL results and source option chain JSON.
+
 use crate::raw_option_chain::parse_option_chain_file;
 use crate::{
     ChainScreener, LegBuilder, OptionChain, OptionChainDb, OptionType, OptionsDbMode, Position,
@@ -7,6 +9,7 @@ use chrono::NaiveDate;
 
 use std::path::{Path, PathBuf};
 
+/// SQL-driven vertical spread screener. The default queries put credit spreads.
 pub struct SpreadScreener {
     queries: &'static [(OptionType, &'static str)],
 }
@@ -23,10 +26,19 @@ impl Default for SpreadScreener {
 }
 
 impl SpreadScreener {
+    /// Use custom SQL queries paired with the option type of their legs.
+    ///
+    /// Each query must return ticker text at column 0, expiry text (`YYYY-MM-DD`)
+    /// at column 2, short strike at column 3, and long strike at column 4.
+    /// Column 1 is ignored.
     pub fn new(queries: &'static [(OptionType, &'static str)]) -> Self {
         Self { queries }
     }
 
+    /// Query spreads and build legs from JSON snapshots in `option_chains_path`.
+    ///
+    /// JSON filenames use the ticker prefix before `_`. Failed queries or candidates
+    /// are skipped and may be reported to stderr.
     pub fn screen_db(
         &self,
         chain: &OptionChainDb,

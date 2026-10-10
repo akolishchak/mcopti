@@ -1,16 +1,18 @@
 //! Price legs and positions along simulated scenario paths.
 
 use crate::{
-    Context, LegUniverse, OptionType, Position, Scenario, bs_price_with_rate, interp_linear_kgrid,
-    linspace_vec,
+    Context, LegUniverse, OptionType, Position, Scenario, VolSurfaceError, bs_price_with_rate,
+    interp_linear_kgrid, linspace_vec,
 };
 use rayon::prelude::*;
-use std::borrow::Cow;
 use std::{error::Error, fmt};
 
 const SECONDS_PER_YEAR: f64 = 365.0 * 24.0 * 3600.0;
 const EPSILON: f64 = 1e-8;
 
+/// Price positions across all scenario paths and aggregate terminal return and risk.
+///
+/// Stored exit-grid, commission, and slippage settings do not currently affect [`Self::run`].
 pub struct Simulator {
     exit_grid: Vec<f64>,
     commission_per_trade: f64,
@@ -28,18 +30,31 @@ impl Default for Simulator {
     }
 }
 
+/// Per-position results in quote price units, without a contract multiplier.
 #[derive(Debug)]
 pub struct SimulationStats {
+    /// Original position and its signed entry premium.
     pub position: Position,
+    /// Mean terminal mark across paths minus the entry premium.
     pub expected_value: f64,
+    /// Entry premium minus the lowest simulated mark across paths and steps, floored at zero.
     pub risk: f64,
+    /// Expected value divided by risk; may be infinite or NaN when risk is zero.
     pub ror: f64,
 }
 
+/// Failure to validate scenario data or price a universe.
 #[derive(Debug)]
 pub enum SimulatorError {
+    /// Scenario shapes, values, expiries, or position indexes are invalid.
     InvalidInput(&'static str),
-    EmptyExpirySlice { expire_id: usize },
+    /// An expiry group contains no contracts.
+    EmptyExpirySlice {
+        /// Expiry index whose group contains no legs.
+        expire_id: usize,
+    },
+    /// A required volatility surface query failed.
+    VolSurface(VolSurfaceError),
 }
 
 impl fmt::Display for SimulatorError {
@@ -49,11 +64,25 @@ impl fmt::Display for SimulatorError {
             Self::EmptyExpirySlice { expire_id } => {
                 write!(f, "empty expiry slice for expire_id={expire_id}")
             }
+            Self::VolSurface(e) => write!(f, "{e}"),
         }
     }
 }
 
-impl Error for SimulatorError {}
+impl Error for SimulatorError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::VolSurface(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<VolSurfaceError> for SimulatorError {
+    fn from(value: VolSurfaceError) -> Self {
+        Self::VolSurface(value)
+    }
+}
 
 struct ExpiryData {
     taus: Vec<f64>,
@@ -95,22 +124,37 @@ impl PathAcc {
 }
 
 impl Simulator {
+    /// Store evenly spaced exit thresholds from `start` to `end`.
     pub fn exit_grid(mut self, start: f64, end: f64, points: usize) -> Self {
         self.exit_grid = linspace_vec(start, end, points);
         self
     }
 
+    /// Store the per-trade commission setting.
     pub fn commission_per_trade(mut self, value: f64) -> Self {
         self.commission_per_trade = value;
         self
     }
 
+    /// Store the closing slippage fraction.
     pub fn close_slippage_frac(mut self, value: f64) -> Self {
         self.close_slippage_frac = value;
         self
     }
 
     // returns per-position metrics (expected value and drawdown-based risk) across paths.
+    /// Price the universe using its scenario and return results in input position order.
+    ///
+    /// Volatility lookup rows are prepared before valuation, and paths are processed
+    /// in parallel. Each distinct contract is priced once per path step; positions
+    /// sharing contracts reuse those prices through the universe's leg indexes.
+    ///
+    /// The scenario must contain complete paths and use the same latest expiry as the universe.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for empty or inconsistent inputs, invalid values or indexes,
+    /// or unavailable volatility surface data.
     pub fn run(
         &self,
         context: &Context,
@@ -129,12 +173,44 @@ impl Simulator {
         let positions_idx = &universe.positions_idx;
         let pos_count = positions_idx.len();
         let ln_strike: Vec<f64> = universe.legs.iter().map(|leg| leg.strike.ln()).collect();
-        let (_, max_expiry_close) = calendar.session(max_expire);
         if steps == 0 || leg_count == 0 {
             return Err(SimulatorError::InvalidInput(
                 "scenario has zero steps or universe has zero legs",
             ));
         }
+        if scenario.dt_years.len() != steps
+            || iv_mult_path.len() != steps
+            || scenario.var_cum.len() != steps + 1
+            || !s_path.len().is_multiple_of(steps)
+            || scenario.max_expire != max_expire
+        {
+            return Err(SimulatorError::InvalidInput(
+                "scenario arrays or expiry are inconsistent",
+            ));
+        }
+        if positions_idx.len() != universe.positions.len()
+            || positions_idx
+                .iter()
+                .flatten()
+                .any(|(idx, _)| *idx >= leg_count)
+        {
+            return Err(SimulatorError::InvalidInput(
+                "position indexes are inconsistent with universe legs",
+            ));
+        }
+        if s_path.iter().any(|s| !s.is_finite() || *s <= 0.0)
+            || iv_mult_path.iter().any(|v| !v.is_finite() || *v <= 0.0)
+            || tau_driver.iter().any(|t| !t.is_finite() || *t < 0.0)
+            || scenario
+                .dt_years
+                .iter()
+                .any(|dt| !dt.is_finite() || *dt < 0.0)
+        {
+            return Err(SimulatorError::InvalidInput(
+                "scenario contains invalid prices, times or volatility multipliers",
+            ));
+        }
+        let (_, max_expiry_close) = calendar.session(max_expire);
         // Scenario paths are stored as contiguous [path][step] blocks.
         let paths = s_path.len() / steps;
         if paths == 0 {
@@ -162,6 +238,14 @@ impl Simulator {
                 ((max_expiry_close - leg_close).as_seconds_f64() / SECONDS_PER_YEAR).max(0.0);
             let legs_in_expiry = expire_slice.legs.len();
             let step_stride = legs_in_expiry * row_stride;
+            let call_present = expire_slice
+                .legs
+                .iter()
+                .any(|leg| leg.option_type == OptionType::Call);
+            let put_present = expire_slice
+                .legs
+                .iter()
+                .any(|leg| leg.option_type == OptionType::Put);
 
             // Vec over steps -> (tau, leg-major flat rows for that step)
             let mut taus = Vec::with_capacity(steps);
@@ -177,18 +261,20 @@ impl Simulator {
                 // Rows store total variance, so the scale applies as iv_mult^2.
                 let scale = iv_mult * iv_mult;
                 // Cache per-step rows to avoid re-reading the surface when multiple legs share type.
-                let mut row_call: Option<Cow<'_, [f64]>> = None;
-                let mut row_put: Option<Cow<'_, [f64]>> = None;
+                let row_call = call_present
+                    .then(|| vol_surface.row(OptionType::Call, tau_to_expire))
+                    .transpose()?;
+                let row_put = put_present
+                    .then(|| vol_surface.row(OptionType::Put, tau_to_expire))
+                    .transpose()?;
 
                 // Build leg-major row blocks to keep indexing cheap in inner loop.
                 for leg in expire_slice.legs.iter() {
-                    let src: &[f64] = match leg.option_type {
-                        OptionType::Call => row_call.get_or_insert_with(|| {
-                            vol_surface.row(OptionType::Call, tau_to_expire)
-                        }),
-                        OptionType::Put => row_put
-                            .get_or_insert_with(|| vol_surface.row(OptionType::Put, tau_to_expire)),
-                    };
+                    let src = match leg.option_type {
+                        OptionType::Call => row_call.as_deref(),
+                        OptionType::Put => row_put.as_deref(),
+                    }
+                    .ok_or(SimulatorError::InvalidInput("missing volatility row"))?;
                     rows.extend(src.iter().map(|&w| w * scale));
                 }
                 taus.push(tau_to_expire);
@@ -350,7 +436,7 @@ mod tests {
         let chain_path = manifest_dir.join("tests/fixtures/ARM_option_chain_20250908_160038.json");
         let raw_chain =
             parse_option_chain_file(&chain_path).expect("failed to load option chain fixture");
-        Context::from_raw_option_chain("ARM", &raw_chain)
+        Context::from_raw_option_chain("ARM", &raw_chain).expect("valid fixture chain")
     }
 
     fn assert_close(got: f64, want: f64, tol: f64, label: &str) {
@@ -500,8 +586,10 @@ mod tests {
         let scale = iv_mult * iv_mult;
 
         let k_call = call.strike.ln() - s.ln();
-        let w_call =
-            interp_linear_kgrid(k_call, &context.vol_surface.row(OptionType::Call, tau)) * scale;
+        let w_call = interp_linear_kgrid(
+            k_call,
+            &context.vol_surface.row(OptionType::Call, tau).unwrap(),
+        ) * scale;
         let iv_call = (w_call / tau).sqrt();
         let call_mark = bs_price_with_rate(
             OptionType::Call,
@@ -514,8 +602,10 @@ mod tests {
         );
 
         let k_put = put.strike.ln() - s.ln();
-        let w_put =
-            interp_linear_kgrid(k_put, &context.vol_surface.row(OptionType::Put, tau)) * scale;
+        let w_put = interp_linear_kgrid(
+            k_put,
+            &context.vol_surface.row(OptionType::Put, tau).unwrap(),
+        ) * scale;
         let iv_put = (w_put / tau).sqrt();
         let put_mark = bs_price_with_rate(
             OptionType::Put,

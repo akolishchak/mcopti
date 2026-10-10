@@ -10,10 +10,14 @@ pub struct Pchip<'a> {
     d: Vec<f64>, // slopes at nodes
 }
 
+/// Invalid data for a shape-preserving cubic interpolant.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PchipError {
+    /// The arrays differ in length or contain fewer than two points.
     LengthMismatch,
+    /// The x coordinates are not strictly increasing.
     NonIncreasingX,
+    /// An x or y coordinate is not finite.
     NonFiniteInput,
 }
 
@@ -31,6 +35,21 @@ impl Error for PchipError {}
 
 impl<'a> Pchip<'a> {
     /// Build a monotone shape-preserving cubic interpolant.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless both arrays are finite, have equal length of at least
+    /// two, and the x coordinates are strictly increasing.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcopti::Pchip;
+    ///
+    /// let curve = Pchip::new(vec![0.0, 1.0], vec![2.0, 4.0])?;
+    /// assert!((curve.eval(0.5) - 3.0).abs() < 1e-12);
+    /// # Ok::<(), mcopti::pchip::PchipError>(())
+    /// ```
     pub fn new<T>(x: T, y: T) -> Result<Self, PchipError>
     where
         T: Into<Cow<'a, [f64]>>,

@@ -10,7 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let chain_path = manifest_dir.join("tests/fixtures/ARM_option_chain_20250908_160038.json");
 
     let raw = parse_option_chain_file(chain_path)?;
-    let mut ctx = Context::from_raw_option_chain("ARM", &raw);
+    let mut ctx = Context::from_raw_option_chain("ARM", &raw)?;
 
     // Optional tuning
     ctx.config.paths = 10_000;

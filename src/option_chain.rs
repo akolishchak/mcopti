@@ -3,14 +3,23 @@
 use crate::{OptionType, RawOptionChain, raw_option_chain::OptionContract};
 use chrono::NaiveDate;
 
+/// Option quotes grouped by side and expiry for lookup and surface construction.
 pub struct OptionChain {
+    /// Underlying spot price at the snapshot.
     pub spot: f64,
+    /// Snapshot date used to calculate time to expiry.
     pub date: NaiveDate,
+    /// Call quotes.
     pub calls: OptionChainSide,
+    /// Put quotes.
     pub puts: OptionChainSide,
 }
 
 impl OptionChain {
+    /// Group source quotes by side and expiry, preserving their order.
+    ///
+    /// Within each side, input must be grouped by increasing expiry and strictly
+    /// increasing strike. This method does not sort or validate the quotes.
     pub fn from_raw(raw_option_chain: &RawOptionChain) -> Self {
         let spot = raw_option_chain.last_price;
         let date = raw_option_chain.date;
@@ -42,6 +51,7 @@ impl OptionChain {
     }
 }
 
+/// Quotes for one option type, stored in parallel arrays by expiry.
 pub struct OptionChainSide {
     tau: Vec<f64>,
     expire: Vec<NaiveDate>,
@@ -58,11 +68,17 @@ pub struct OptionChainSide {
 
 /// View over all quotes that share the same expiry/τ.
 pub struct OptionSlice<'a> {
+    /// Shared expiration date.
     pub expire: NaiveDate,
+    /// Time to expiry in calendar years, using 365 days per year.
     pub tau: f64,
+    /// Strike prices in input order.
     pub strike: &'a [f64],
+    /// Log-moneyness values, `ln(strike / spot)`.
     pub k: &'a [f64],
+    /// Mid prices, `(bid + ask) / 2`.
     pub mid: &'a [f64],
+    /// Annual implied volatilities as decimals.
     pub iv: &'a [f64],
 }
 
@@ -136,14 +152,21 @@ impl OptionChainSide {
             })
     }
 
+    /// Return the time to each expiry in calendar years, in expiry index order.
     pub fn tau(&self) -> &[f64] {
         &self.tau
     }
 
+    /// Return the side's index for an exact expiry, or `None` if absent.
     pub fn expire_id(&self, expire: NaiveDate) -> Option<usize> {
         self.expire.binary_search(&expire).ok()
     }
 
+    /// Return `(mid price, implied volatility)` for an exact strike, or `None` if absent.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `expire_id` is outside this side's expiry indexes.
     pub fn strike(&self, strike: f64, expire_id: usize) -> Option<(f64, f64)> {
         let (start, end) = self.tau_range[expire_id];
         match self.strike[start..end].binary_search_by(|v| v.total_cmp(&strike)) {

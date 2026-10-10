@@ -1,40 +1,54 @@
 //! Build time grids, vol multipliers, and Monte Carlo spot paths.
 
-use chrono::{Duration, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate};
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 use rand_xoshiro::Xoshiro256PlusPlus;
 use rayon::prelude::*;
 use std::{error::Error, fmt};
 
-use crate::{Context, LegUniverse, OptionType, VolDynamicsError, mu_table, vol_factor_table};
+use crate::{
+    Context, LegUniverse, OptionType, VolDynamicsError, VolSurfaceError, mu_table, vol_factor_table,
+};
 
 const SECONDS_PER_YEAR: f64 = 365.0 * 24.0 * 3600.0;
 const MINUTES_PER_DAY: f64 = 24.0 * 60.0;
 // Fraction of daily variance assigned to overnight gaps vs intraday.
 const OVERNIGHT_VAR_FRACTION: f64 = 0.30;
 
+/// Shared time and volatility grids plus Monte Carlo spot paths for a leg universe.
 pub struct Scenario {
+    /// Per-step elapsed time in years, using 365 days per year.
     pub dt_years: Vec<f64>, // aka dt_arr: per-step durations in years
     // Time-to-max-expiry at each step end (used to align expiries in the simulator).
+    /// Time from each step end to the universe's latest expiry close, in years.
     pub tau_driver: Vec<f64>,
+    /// Per-step IV multipliers shared by all Monte Carlo paths; length equals the step count.
     pub iv_mult_path: Vec<f64>,
+    /// Step-end spot prices stored as `[path][step]`; index with `path * steps + step`.
     pub s_path: Vec<f64>,
     // Universe max expiry this scenario is aligned to.
+    /// Latest universe expiry used to align the time grid.
     pub max_expire: NaiveDate,
     // Prefix integrated variance: var_cum[i] = sum_{j<i} sigma_eff[j]^2 * dt_years[j]
+    /// Prefix integrated variance, with `steps + 1` entries and an initial zero.
     pub var_cum: Vec<f64>,
 }
 
+/// Failure to validate inputs, calibrate dynamics, or build a scenario.
 #[derive(Debug)]
 pub enum ScenarioError {
+    /// Historical calibration or a volatility surface query failed.
     VolDynamics(VolDynamicsError),
+    /// The universe, configuration, dates, or requested path allocation is invalid.
+    InvalidInput(&'static str),
 }
 
 impl fmt::Display for ScenarioError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::VolDynamics(e) => write!(f, "{e}"),
+            Self::InvalidInput(msg) => write!(f, "invalid scenario input: {msg}"),
         }
     }
 }
@@ -43,6 +57,7 @@ impl Error for ScenarioError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::VolDynamics(e) => Some(e),
+            Self::InvalidInput(_) => None,
         }
     }
 }
@@ -53,17 +68,83 @@ impl From<VolDynamicsError> for ScenarioError {
     }
 }
 
+impl From<VolSurfaceError> for ScenarioError {
+    fn from(value: VolSurfaceError) -> Self {
+        Self::VolDynamics(VolDynamicsError::VolSurface(value))
+    }
+}
+
 impl Scenario {
+    /// Build a scenario using history in `data/market_data_1d.db`.
+    /// Create and populate it first with `MarketData::default_write` and `MarketData::ingest`,
+    /// or the `ingest_market_data` command. This function only reads existing data.
+    ///
+    /// Paths are generated in parallel. With the same inputs and [`crate::Config::seed`],
+    /// each path is reproducible regardless of worker scheduling.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid settings, an empty universe, invalid trading dates,
+    /// unavailable history, failed surface queries, or an oversized path allocation.
     pub fn new(context: &Context, leg_universe: &LegUniverse) -> Result<Self, ScenarioError> {
+        if leg_universe.legs.is_empty() || context.config.paths == 0 {
+            return Err(ScenarioError::InvalidInput(
+                "universe and path count must be nonempty",
+            ));
+        }
+        if context.config.step_minutes <= 0 {
+            return Err(ScenarioError::InvalidInput("step_minutes must be positive"));
+        }
+        let step = Duration::try_minutes(context.config.step_minutes)
+            .ok_or(ScenarioError::InvalidInput("step_minutes is too large"))?;
+        for (low, high) in [context.config.factor_clamp, context.config.iv_level_clamp] {
+            if !low.is_finite() || !high.is_finite() || low <= 0.0 || low > high {
+                return Err(ScenarioError::InvalidInput(
+                    "volatility clamps must be positive, finite and ordered",
+                ));
+            }
+        }
+        if !context.config.iv_floor.is_finite()
+            || context.config.iv_floor <= 0.0
+            || !context.risk_free_rate.is_finite()
+        {
+            return Err(ScenarioError::InvalidInput(
+                "iv_floor must be positive and rates finite",
+            ));
+        }
         let start_date = context.option_chain.date;
         let expiry_date = leg_universe.max_expire;
+        let last_year = context
+            .option_chain
+            .calls
+            .slices()
+            .chain(context.option_chain.puts.slices())
+            .map(|slice| slice.expire.year())
+            .max()
+            .unwrap_or(start_date.year())
+            .max(start_date.year() + 1);
+        if expiry_date < start_date || expiry_date.year() > last_year {
+            return Err(ScenarioError::InvalidInput(
+                "expiry is before the chain date or outside the context calendar",
+            ));
+        }
         let calendar = &context.calendar;
+        if !calendar.is_trading_day(start_date) || !calendar.is_trading_day(expiry_date) {
+            return Err(ScenarioError::InvalidInput(
+                "chain date and expiry must be trading days",
+            ));
+        }
         let (_, expiry_close) = calendar.session(expiry_date);
         let step_minutes = context.config.step_minutes;
         let days_to_expiry = (expiry_date - start_date).num_days();
         // Approximate step count: intraday bars plus one overnight gap per calendar day.
-        let capacity = (days_to_expiry * context.calendar.max_session_mins() / step_minutes
-            + days_to_expiry) as usize;
+        let capacity = days_to_expiry
+            .checked_mul(calendar.max_session_mins())
+            .and_then(|minutes| (minutes / step_minutes).checked_add(days_to_expiry))
+            .and_then(|steps| usize::try_from(steps).ok())
+            .ok_or(ScenarioError::InvalidInput(
+                "scenario step count is too large",
+            ))?;
         let paths = context.config.paths;
         let base_seed = context.config.seed;
 
@@ -104,7 +185,6 @@ impl Scenario {
         let s_iv_floor = s0 * context.config.iv_floor;
 
         let mut day = start_date;
-        let step = Duration::minutes(step_minutes);
         loop {
             let day_start = dt_years.len();
             let (open_dt, close_dt) = calendar.session(day);
@@ -113,7 +193,10 @@ impl Scenario {
             median_buf.clear();
 
             while t < close_dt {
-                let next = (t + step).min(close_dt);
+                let next = t
+                    .checked_add_signed(step)
+                    .ok_or(ScenarioError::InvalidInput("step_minutes is too large"))?
+                    .min(close_dt);
                 // Use step end for tau so simulator timestamps align to row lookups.
                 let dt_year = (next - t).as_seconds_f64() / SECONDS_PER_YEAR;
                 let tau = ((expiry_close - next).as_seconds_f64() / SECONDS_PER_YEAR).max(1e-8);
@@ -123,8 +206,8 @@ impl Scenario {
 
                 // Base IV from surface, with a floor via a lower strike to stabilize skew tails.
                 let iv = vol_surface
-                    .iv(side, tau, s0)
-                    .max(vol_surface.iv(side, tau, s_iv_floor));
+                    .iv(side, tau, s0)?
+                    .max(vol_surface.iv(side, tau, s_iv_floor)?);
                 let d = ((tau * 365.0).round().max(1.0)) as i32; // >=1 day
                 let idx = d.clamp(1, (f_by_day.len() - 1) as i32) as usize;
                 // sigma = f(d) * IV; f(d) is the realized/implied ratio for that tenor.
@@ -170,8 +253,8 @@ impl Scenario {
                 tau_driver.push(tau);
 
                 let iv = vol_surface
-                    .iv(side, tau, s0)
-                    .max(vol_surface.iv(side, tau, s_iv_floor));
+                    .iv(side, tau, s0)?
+                    .max(vol_surface.iv(side, tau, s_iv_floor)?);
                 let d = ((tau * 365.0).round().max(1.0)) as i32;
                 let idx = d.clamp(1, (f_by_day.len() - 1) as i32) as usize;
                 let sigma = (f_by_day[idx] * iv).clamp(1e-6, 5.0);
@@ -224,7 +307,14 @@ impl Scenario {
             .map(|(&sigma, &dt)| (mu_trend - 0.5 * sigma * sigma) * dt)
             .collect();
 
-        let mut s_path: Vec<f64> = vec![0.0; paths * steps];
+        let path_len = paths.checked_mul(steps).ok_or(ScenarioError::InvalidInput(
+            "paths times steps is too large",
+        ))?;
+        let mut s_path = Vec::new();
+        s_path
+            .try_reserve_exact(path_len)
+            .map_err(|_| ScenarioError::InvalidInput("scenario path allocation is too large"))?;
+        s_path.resize(path_len, 0.0);
 
         let log_s0 = s0.ln();
         // chunk by paths to keep per-worker work sizable and reduce scheduling overhead
@@ -345,7 +435,8 @@ mod tests {
         let chain_path = manifest_dir.join("tests/fixtures/ARM_option_chain_20250908_160038.json");
         let raw_chain =
             parse_option_chain_file(&chain_path).expect("failed to load option chain fixture");
-        let mut context = Context::from_raw_option_chain("ARM", &raw_chain);
+        let mut context =
+            Context::from_raw_option_chain("ARM", &raw_chain).expect("valid fixture chain");
         context.config = Config {
             paths: 2,
             seed: 7,

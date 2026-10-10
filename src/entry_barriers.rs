@@ -1,14 +1,20 @@
 //! Entry-time mark inversion for deriving win/loss spot barriers.
 
-use crate::{Context, OptionType, Position, Scenario, bs_price_with_rate, interp_linear_kgrid};
+use crate::{
+    Context, OptionType, Position, Scenario, VolSurfaceError, bs_price_with_rate,
+    interp_linear_kgrid,
+};
 use std::borrow::Cow;
 
 const EPSILON: f64 = 1e-8;
 const SECONDS_PER_YEAR: f64 = 365.0 * 24.0 * 3600.0;
 
+/// Entry-time profit and loss spot distances, normalized by scenario log-return deviation.
 #[derive(Debug)]
 pub struct EntryBarriers {
+    /// Absolute log-spot distance to the profit target, in standard deviations; NaN if unavailable.
     pub z_win: f64,
+    /// Absolute log-spot distance to the loss target, in standard deviations; NaN if unavailable.
     pub z_loss: f64,
 }
 
@@ -23,6 +29,14 @@ struct LegEvalInput<'a> {
 }
 
 impl EntryBarriers {
+    /// Estimate normalized spot distances for profit-taking and stop-loss marks.
+    ///
+    /// Targets are fractions of the entry premium magnitude, such as `0.5` for 50%.
+    /// Invalid scenario data or unavailable surface data produces NaN distances.
+    ///
+    /// # Panics
+    ///
+    /// Panics if required quote or expiry dates are outside the context's calendar.
     pub fn new(
         context: &Context,
         position: &Position,
@@ -47,7 +61,12 @@ impl EntryBarriers {
         }
 
         let s0 = context.option_chain.spot.max(EPSILON);
-        let leg_inputs = Self::build_leg_inputs(context, position);
+        let Ok(leg_inputs) = Self::build_leg_inputs(context, position) else {
+            return Self {
+                z_win: f64::NAN,
+                z_loss: f64::NAN,
+            };
+        };
         let premium = position.premium;
 
         // Side is +1 for debit, -1 for credit, keeping PT/SL math sign-safe.
@@ -108,12 +127,16 @@ impl EntryBarriers {
         Self { z_win, z_loss }
     }
 
+    /// Return `z_loss / max(z_win, 1e-9)`.
     pub fn ratio(&self) -> f64 {
         let denom = self.z_win.max(1e-9);
         self.z_loss / denom
     }
 
-    fn build_leg_inputs<'a>(context: &'a Context, position: &Position) -> Vec<LegEvalInput<'a>> {
+    fn build_leg_inputs<'a>(
+        context: &'a Context,
+        position: &Position,
+    ) -> Result<Vec<LegEvalInput<'a>>, VolSurfaceError> {
         let (_, as_of_close) = context.calendar.session(context.option_chain.date);
         position
             .legs
@@ -122,15 +145,15 @@ impl EntryBarriers {
                 let (_, leg_close) = context.calendar.session(leg.expire);
                 let tau =
                     ((leg_close - as_of_close).as_seconds_f64() / SECONDS_PER_YEAR).max(EPSILON);
-                LegEvalInput {
+                Ok(LegEvalInput {
                     option_type: leg.option_type,
                     strike: leg.strike,
                     ln_strike: leg.strike.ln(),
                     qty: *qty as f64,
                     tau,
                     inv_tau: 1.0 / tau,
-                    w_row: context.vol_surface.row(leg.option_type, tau),
-                }
+                    w_row: context.vol_surface.row(leg.option_type, tau)?,
+                })
             })
             .collect()
     }
@@ -154,6 +177,9 @@ impl EntryBarriers {
     /// Non-monotone root find for f(S)=mark(S)-target.
     /// - Finds all zero-crossings on a log grid and returns the root closest to S0.
     /// - If no bracket is found, returns the nearest |f| point.
+    ///
+    /// Scans spots from `0.25 * s0` to `4 * s0` and refines bracketed roots.
+    /// Returns `None` if a grid evaluation or the target is nonfinite.
     pub fn find_s_for_mark<F>(mut mark_at_s: F, target_mark: f64, s0: f64) -> Option<f64>
     where
         F: FnMut(f64) -> f64,
@@ -258,7 +284,7 @@ mod tests {
         let chain_path = manifest_dir.join("tests/fixtures/ARM_option_chain_20250908_160038.json");
         let raw_chain =
             parse_option_chain_file(&chain_path).expect("failed to load option chain fixture");
-        Context::from_raw_option_chain("ARM", &raw_chain)
+        Context::from_raw_option_chain("ARM", &raw_chain).expect("valid fixture chain")
     }
 
     fn approx_eq(a: f64, b: f64, tol: f64) -> bool {

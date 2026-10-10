@@ -1,3 +1,5 @@
+//! Store option snapshots in SQLite and query quotes for screening and backtests.
+
 use crate::raw_option_chain::{OptionChainError, parse_option_chain_file};
 use crate::{OptionType, Position, RawOptionChain};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
@@ -61,26 +63,38 @@ const OPTIONS_DB_SCHEMA: &str = r#"
         ON snapshots(symbol_id, snap_date);
 "#;
 
+/// SQLite option snapshots, with a source directory for JSON ingestion.
 pub struct OptionChainDb {
     connection: Connection,
     data_path: PathBuf,
 }
 
+/// Storage and access mode for an option chain database.
 pub enum OptionsDbMode {
+    /// Read an existing immutable database; finish and close writers before opening.
     Read,
+    /// Open for writing, creating the database and schema in an existing directory.
     Write,
+    /// Create an empty in-memory database with the same schema.
     Memory,
 }
 
+/// Failure to access, ingest, or query option snapshots.
 #[derive(Debug)]
 pub enum OptionChainDbError {
+    /// A SQLite operation failed.
     Db(rusqlite::Error),
+    /// A source directory or file could not be read.
     Io(std::io::Error),
+    /// An option chain JSON file could not be parsed.
     Parse(OptionChainError),
+    /// A ticker, filename, or payload is invalid.
     InvalidPayload(String),
+    /// The requested position does not have a complete set of quotes.
     DataNotFound(String),
 }
 
+/// Result type for option database operations.
 pub type OptionChainDbResult<T> = std::result::Result<T, OptionChainDbError>;
 
 impl Display for OptionChainDbError {
@@ -126,6 +140,15 @@ impl From<OptionChainError> for OptionChainDbError {
 }
 
 impl OptionChainDb {
+    /// Open `<data_path>/options.db`, or create an empty in-memory database.
+    ///
+    /// Write mode requires the directory to exist. Read mode treats the file as
+    /// immutable; close writers first. Memory mode uses `data_path` only as the
+    /// source for [`Self::ingest_from_json`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database cannot be opened or initialized.
     pub fn new(data_path: impl AsRef<Path>, dbmode: OptionsDbMode) -> OptionChainDbResult<Self> {
         let data_path = data_path.as_ref();
         let path = data_path.join(OPTION_DB_FILE);
@@ -183,18 +206,41 @@ impl OptionChainDb {
         })
     }
 
+    /// Open a completed database in read mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns database access errors from [`Self::new`].
     pub fn default_read(data_path: &str) -> OptionChainDbResult<Self> {
         Self::new(data_path, OptionsDbMode::Read)
     }
 
+    /// Open or create a database in write mode within an existing directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns database access or initialization errors from [`Self::new`].
     pub fn default_write(data_path: &str) -> OptionChainDbResult<Self> {
         Self::new(data_path, OptionsDbMode::Write)
     }
 
+    /// Create an empty in-memory database, using `data_path` as its JSON source.
+    ///
+    /// # Errors
+    ///
+    /// Returns database initialization errors from [`Self::new`].
     pub fn default_memory(data_path: &str) -> OptionChainDbResult<Self> {
         Self::new(data_path, OptionsDbMode::Memory)
     }
 
+    /// Ingest JSON files from the source directory in filename order; return the file count.
+    ///
+    /// The filename prefix before `_` supplies the ticker, as in `ARM_chain.json`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on directory access, invalid filenames, JSON parsing, or database writes.
+    /// Earlier files may already have been committed when a later file fails.
     pub fn ingest_from_json(&mut self) -> OptionChainDbResult<usize> {
         let mut files = Vec::new();
         for entry in std::fs::read_dir(&self.data_path)? {
@@ -224,6 +270,13 @@ impl OptionChainDb {
         Ok(ingested)
     }
 
+    /// Upsert one snapshot and its quotes in a transaction.
+    ///
+    /// The ticker is trimmed and uppercased.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty ticker or a failed database write.
     pub fn ingest(&mut self, ticker: &str, payload: &RawOptionChain) -> OptionChainDbResult<()> {
         let symbol = ticker.trim().to_ascii_uppercase();
         if symbol.is_empty() {
@@ -291,6 +344,11 @@ impl OptionChainDb {
         Ok(())
     }
 
+    /// Execute SQL and collect rows converted by `mapper`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SQL execution or row conversion fails.
     pub fn query_map<T, F>(&self, query: &str, mapper: F) -> OptionChainDbResult<Vec<T>>
     where
         F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
@@ -306,6 +364,13 @@ impl OptionChainDb {
         Ok(out)
     }
 
+    /// Sum quote mid prices times signed quantities, without a contract multiplier.
+    ///
+    /// Use a database containing one snapshot date for the symbol. An empty position marks at zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if quotes are missing or ambiguous, prices are NULL, or the query fails.
     pub fn position_mark_mid(&self, symbol: &str, position: &Position) -> OptionChainDbResult<f64> {
         if position.legs.is_empty() {
             return Ok(0.0);
@@ -375,6 +440,11 @@ impl OptionChainDb {
         Ok(sum)
     }
 
+    /// Read a symbol's spot on `day` (`YYYY-MM-DD`), or `None` if no snapshot exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query or row conversion fails.
     pub fn spot_at(&self, symbol: &str, day: &str) -> OptionChainDbResult<Option<f64>> {
         let spot = self
             .connection
@@ -570,7 +640,8 @@ mod tests {
         let q0 = 1_i64;
         let q1 = -2_i64;
 
-        let context = Context::from_raw_option_chain(&symbol, &payload);
+        let context =
+            Context::from_raw_option_chain(&symbol, &payload).expect("valid fixture chain");
         let leg_builder = LegBuilder::new(&context);
         let mut position = Position::default();
         position.push(

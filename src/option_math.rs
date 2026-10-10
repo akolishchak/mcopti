@@ -5,6 +5,7 @@ use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 use rand_xoshiro::Xoshiro256PlusPlus;
 
+/// Approximate the Gaussian error function with absolute error about `1.5e-7`.
 pub fn erf(x: f64) -> f64 {
     // Abramowitz & Stegun 7.1.26; max error ~1.5e-7
     let sign = if x < 0.0 { -1.0 } else { 1.0 };
@@ -24,10 +25,16 @@ pub fn erf(x: f64) -> f64 {
     sign * y
 }
 
+/// Return the standard normal cumulative probability at `x`.
 pub fn ncdf(x: f64) -> f64 {
     0.5 * (1.0 + erf(x * std::f64::consts::FRAC_1_SQRT_2))
 }
 
+/// Price a European option with zero interest and dividend rates.
+///
+/// `s` and `k` are positive spot and strike prices; `t` is time in years and
+/// `sigma` is annual volatility as a decimal. Time and volatility are floored
+/// at `1e-12` and `1e-8`. Returns price per underlying unit.
 pub fn bs_price(option_type: OptionType, s: f64, k: f64, t: f64, sigma: f64) -> f64 {
     let t = t.max(1e-12);
     let sigma = sigma.max(1e-8);
@@ -41,6 +48,10 @@ pub fn bs_price(option_type: OptionType, s: f64, k: f64, t: f64, sigma: f64) -> 
     }
 }
 
+/// Price a European option with continuously compounded annual rates.
+///
+/// Uses the units and floors of [`bs_price`]; `r` is the risk-free rate and `q`
+/// is the dividend yield, both as decimals.
 pub fn bs_price_with_rate(
     option_type: OptionType,
     s: f64,
@@ -64,6 +75,7 @@ pub fn bs_price_with_rate(
     }
 }
 
+/// Return European option delta using the inputs and units of [`bs_price_with_rate`].
 pub fn bs_delta_with_rate(
     option_type: OptionType,
     s: f64,
@@ -85,6 +97,11 @@ pub fn bs_delta_with_rate(
     }
 }
 
+/// Infer annual implied volatility from a European option price by bisection.
+///
+/// Inputs use the units of [`bs_price_with_rate`]. Returns `None` for a
+/// nonpositive price, negative time, or a price outside the volatility bracket
+/// `[1e-6, 5.0]`. Other inputs must be finite, with positive spot and strike.
 pub fn implied_volatility_with_rate(
     option_type: OptionType,
     price: f64,
@@ -118,6 +135,10 @@ pub fn implied_volatility_with_rate(
     Some(0.5 * (lo + hi))
 }
 
+/// Update a quote's IV and delta from its mark, leaving both unchanged if inversion fails.
+///
+/// Time is the quote-to-expiry day count divided by 365. Rates `r` and `q`
+/// are annual continuously compounded decimals.
 pub fn update_iv_delta_with_rate(contract: &mut OptionContract, spot: f64, r: f64, q: f64) {
     let t = (contract.expiration - contract.date).num_days() as f64 / 365.0;
     if let Some(iv) = implied_volatility_with_rate(
@@ -135,6 +156,16 @@ pub fn update_iv_delta_with_rate(contract: &mut OptionContract, spot: f64, r: f6
     }
 }
 
+/// Generate lognormal price paths from per-step log drifts and shock scales.
+///
+/// Each step adds `drift[i] + volatility[i] * Z` to log spot, with standard
+/// normal `Z`. These inputs already include time scaling and any drift correction.
+/// The result stores step-end prices as contiguous `[path][step]` blocks;
+/// `Some(seed)` makes draws reproducible. `s0` must be positive.
+///
+/// # Panics
+///
+/// Panics if the input lengths differ or `paths * steps` overflows.
 pub fn simulate_paths(
     s0: f64,
     drift: &[f64],

@@ -3,8 +3,10 @@
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Weekday};
 use chrono_tz::{America::New_York, Tz};
 
+/// Calendar used by simulation and historical volatility helpers.
 pub type MarketCalendar = USMarketCalendar;
 
+/// US equity holidays and session times for an inclusive range of years.
 pub struct USMarketCalendar {
     start_year: i32,
     end_year: i32,
@@ -13,6 +15,13 @@ pub struct USMarketCalendar {
 }
 
 impl USMarketCalendar {
+    /// Build a holiday and early-close calendar for `start_year..=end_year`.
+    ///
+    /// The start year must not exceed the end year.
+    ///
+    /// # Panics
+    ///
+    /// Panics if requested years or derived holiday dates cannot be represented.
     pub fn new(start_year: i32, end_year: i32) -> Self {
         let capacity = (end_year - start_year + 1) as usize;
         let mut holidays = Vec::with_capacity(capacity);
@@ -49,6 +58,11 @@ impl USMarketCalendar {
         }
     }
 
+    /// Return whether the date is a weekday outside the calendar's holiday list.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the date is outside the configured years.
     pub fn is_trading_day(&self, date: NaiveDate) -> bool {
         let year = date.year();
         assert!(year >= self.start_year && year <= self.end_year);
@@ -57,6 +71,13 @@ impl USMarketCalendar {
             && !self.holidays[(year - self.start_year) as usize].contains(&date)
     }
 
+    /// Return whether the date is marked for an early close.
+    ///
+    /// Use [`Self::is_trading_day`] separately to check whether the market opens.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the date is outside the configured years.
     pub fn is_closing_day(&self, date: NaiveDate) -> bool {
         let year = date.year();
         assert!(year >= self.start_year && year <= self.end_year);
@@ -64,6 +85,11 @@ impl USMarketCalendar {
         self.yearly_closes[(year - self.start_year) as usize].contains(&date)
     }
 
+    /// Find the first trading day strictly after `date`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the search leaves the configured years or representable dates.
     pub fn next_trading_day(&self, date: NaiveDate) -> NaiveDate {
         let mut next_date = date + Duration::days(1);
         while !self.is_trading_day(next_date) {
@@ -72,6 +98,11 @@ impl USMarketCalendar {
         next_date
     }
 
+    /// Find the first trading day strictly before `date`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the search leaves the configured years or representable dates.
     pub fn prev_trading_day(&self, date: NaiveDate) -> NaiveDate {
         let mut prev_date = date - Duration::days(1);
         while !self.is_trading_day(prev_date) {
@@ -80,6 +111,13 @@ impl USMarketCalendar {
         prev_date
     }
 
+    /// Return the most recent date whose session has closed by `asof`.
+    ///
+    /// Pass a timestamp in `America/New_York`; its local date is used directly.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the timestamp or the previous trading day is outside the calendar.
     pub fn latest_trade_date(&self, asof: DateTime<Tz>) -> NaiveDate {
         let date = asof.date_naive();
         if !self.is_trading_day(date) {
@@ -94,6 +132,13 @@ impl USMarketCalendar {
         self.prev_trading_day(date)
     }
 
+    /// Return New York session times: 09:30 to 16:00, or 13:00 on early-close dates.
+    ///
+    /// This does not check whether the date is a trading day.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the date is outside the configured years or its times are unrepresentable.
     pub fn session(&self, date: NaiveDate) -> (DateTime<Tz>, DateTime<Tz>) {
         let open_dt_local = date.and_time(chrono::NaiveTime::from_hms_opt(9, 30, 0).unwrap());
         let open_dt = New_York.from_local_datetime(&open_dt_local).unwrap();
@@ -106,6 +151,7 @@ impl USMarketCalendar {
         (open_dt, close_dt)
     }
 
+    /// Return the regular session length in minutes: 390.
     pub fn max_session_mins(&self) -> i64 {
         6 * 60 + 30
     }

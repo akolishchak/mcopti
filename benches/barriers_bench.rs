@@ -35,7 +35,8 @@ fn build_case(paths: usize, manifest_dir: &Path) -> (Context, LegUniverse) {
     let chain_path = manifest_dir.join("tests/fixtures/ARM_option_chain_20250908_160038.json");
     let raw_chain =
         parse_option_chain_file(&chain_path).expect("failed to load option chain fixture");
-    let mut context = Context::from_raw_option_chain("ARM", &raw_chain);
+    let mut context =
+        Context::from_raw_option_chain("ARM", &raw_chain).expect("valid fixture chain");
     context.config = Config {
         paths,
         seed: 7,

@@ -28,7 +28,7 @@ use mcopti::{
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let raw = parse_option_chain_file("tests/fixtures/ARM_option_chain_20250908_160038.json")?;
-    let mut ctx = Context::from_raw_option_chain("ARM", &raw);
+    let mut ctx = Context::from_raw_option_chain("ARM", &raw)?;
 
     // Optional tuning
     ctx.config.paths = 10_000;
@@ -64,22 +64,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
-Run the same example from the repository root:
+Create and populate the market data database, then run the same example from the
+repository root. These dates provide history for the September 2025 option-chain fixture:
 ```
+cargo run --bin ingest_market_data -- ARM 2024-01-01 2025-09-08
 cargo run --example getting_started
 ```
 
 ## Data and assumptions
 - Option chain input should be grouped by expiration and sorted by strike within each
   expiry; the bucketing and binary search assume ordered data.
-- `MarketData::default_read` and `HistoricalVolatility` expect a SQLite DB at
+- `Scenario::new`, `MarketData::default_read`, and `HistoricalVolatility` read a SQLite DB at
   `data/market_data_1d.db` with a `candles` table containing the columns listed in
   `src/market_data.rs`. The `data/` directory is gitignored.
 - The market calendar is US equities (New York time) with standard holidays and
   early closes.
 
+For library use, create and populate the database using the existing methods before
+constructing a scenario:
+
+```rust,no_run
+use chrono::NaiveDate;
+use mcopti::MarketData;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut history = MarketData::default_write("1d")?;
+    history.ingest(
+        "ARM",
+        "1d",
+        NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+        NaiveDate::from_ymd_opt(2025, 9, 8).unwrap(),
+    )?;
+    Ok(())
+}
+```
+
+Write mode creates the directory, database, and schema. Ingestion downloads history
+from Yahoo Finance and can be repeated to update it. Simulation only reads that
+history; it returns an error if the database or required history is unavailable.
+
 ## Market data ingest CLI
 Use the built-in binary to create/update `data/market_data_1d.db` from Yahoo Finance data.
+To use it without cloning the repository after publication:
+
+```
+cargo install mcopti --bin ingest_market_data
+ingest_market_data ARM 2024-01-01 2025-09-08
+```
 
 Run:
 ```

@@ -9,35 +9,63 @@ use std::error::Error as StdError;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
+/// Stored candle or indicator column. Volatility and ranks use decimal units.
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Column {
+    /// Unadjusted opening price.
     Open,
+    /// Unadjusted high price.
     High,
+    /// Unadjusted low price.
     Low,
+    /// Unadjusted closing price.
     Close,
+    /// Reported trading volume.
     Volume,
+    /// Opening price scaled by the adjusted-close factor.
     AdjOpen,
+    /// High price scaled by the adjusted-close factor.
     AdjHigh,
+    /// Low price scaled by the adjusted-close factor.
     AdjLow,
+    /// Adjusted closing price.
     AdjClose,
+    /// Overnight log return from the previous close to the open.
     CoLog,
+    /// Intraday log return from open to close.
     OcLog,
+    /// Close-to-close log return.
     CcLog,
+    /// Overnight log return using adjusted prices.
     CoLogAdj,
+    /// Intraday log return using adjusted prices.
     OcLogAdj,
+    /// Close-to-close log return using adjusted prices.
     CcLogAdj,
+    /// Annualized realized volatility over 20 close-to-close returns.
     Vol20,
+    /// Annualized realized volatility over 20 adjusted close-to-close returns.
     Vol20Adj,
+    /// 20-observation realized volatility slope t-statistic; uses adjusted data when available.
     VolTrend20,
+    /// 20-observation closing price slope t-statistic; uses adjusted data when available.
     AdjCloseTrend20,
+    /// Adjusted realized volatility rank in `[0, 1]` over 126 observations.
     VolRank6,
+    /// Adjusted realized volatility rank in `[0, 1]` over 189 observations.
     VolRank9,
+    /// Adjusted realized volatility rank in `[0, 1]` over 252 observations.
     VolRank12,
+    /// Stored implied volatility; candle ingestion leaves this column unset.
     Iv,
+    /// Stored 20-observation IV trend; candle ingestion leaves this column unset.
     IvTrend20,
+    /// Stored six-month IV rank; candle ingestion leaves this column unset.
     IvRank6,
+    /// Stored nine-month IV rank; candle ingestion leaves this column unset.
     IvRank9,
+    /// Stored twelve-month IV rank; candle ingestion leaves this column unset.
     IvRank12,
 }
 
@@ -84,29 +112,39 @@ const PCT9: usize = 189;
 const PCT12: usize = 252;
 
 impl Column {
+    /// Return this column's zero-based index in the default full column selection.
     #[inline]
     pub fn idx(self) -> usize {
         self as usize
     }
+    /// Return the SQL column name.
     #[inline]
     pub fn name(self) -> &'static str {
         COLUMN_NAMES[self.idx()]
     }
+    /// Return the comma-separated SQL names of all columns in their default order.
     #[inline]
     pub fn all() -> &'static str {
         COLUMN_NAMES_ALL
     }
 }
 
+/// Access mode for a market data database.
 pub enum DbMode {
+    /// Open an existing database for reading.
     Read,
+    /// Open for writing, creating the directory, database, and schema if needed.
     Write,
 }
 
+/// Failure to download, decode, or store market data.
 #[derive(Debug)]
 pub enum IngestError {
+    /// A SQLite operation failed.
     Db(rusqlite::Error),
+    /// The market data HTTP request failed.
     Http(Box<ureq::Error>),
+    /// The response body could not be read or decoded.
     Decode(std::io::Error),
 }
 
@@ -148,6 +186,7 @@ impl From<std::io::Error> for IngestError {
     }
 }
 
+/// SQLite candle history and derived indicators. Only daily (`"1d"`) resolution is supported.
 pub struct MarketData {
     connection: Connection,
     columns: Option<String>,
@@ -155,18 +194,37 @@ pub struct MarketData {
 }
 
 impl MarketData {
+    /// Open `<directory>/market_data_<resolution>.db` in the requested mode.
+    ///
+    /// Write mode creates the directory and schema. Read mode requires an existing database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if directory creation, database access, or schema setup fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `resolution` is not `"1d"`.
     pub fn new(directory: &str, resolution: &str, dbmode: DbMode) -> Result<Self> {
         let path = format!("{directory}/market_data_{resolution}.db");
 
         let connection = match dbmode {
             DbMode::Read => {
-                let uri = format!("file:{path}?mode=ro&immutable=1");
+                let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
 
-                let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
-                    | OpenFlags::SQLITE_OPEN_URI
-                    | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-
-                let conn = Connection::open_with_flags(uri, flags)?;
+                // Read live WAL contents as well as the main file. Callers may still
+                // hold the writer that created or populated this database.
+                let conn = Connection::open_with_flags(&path, flags).map_err(|err| match err {
+                    Error::SqliteFailure(code, message)
+                        if code.code == rusqlite::ErrorCode::CannotOpen =>
+                    {
+                        Error::SqliteFailure(code, Some(format!(
+                            "cannot open {path}: {}; create the market data database in write mode and populate it with MarketData::ingest before simulation",
+                            message.unwrap_or_default(),
+                        )))
+                    }
+                    other => other,
+                })?;
 
                 conn.execute_batch(
                     r#"
@@ -179,6 +237,14 @@ impl MarketData {
                 conn
             }
             DbMode::Write => {
+                std::fs::create_dir_all(directory).map_err(|err| {
+                    Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CANTOPEN),
+                        Some(format!(
+                            "cannot create market data directory {directory}: {err}"
+                        )),
+                    )
+                })?;
                 let conn = Connection::open(path)?;
                 conn.execute_batch(
                     r#"
@@ -235,14 +301,52 @@ impl MarketData {
         })
     }
 
+    /// Open an existing database in `data/`. Populate it with `default_write`
+    /// and `ingest`, or the `ingest_market_data` command, before simulation.
+    ///
+    /// Populate it first with the `ingest_market_data` binary or [`Self::ingest`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database cannot be opened for reading.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `resolution` is not `"1d"`.
     pub fn default_read(resolution: &str) -> Result<Self> {
         Self::new("data", resolution, DbMode::Read)
     }
 
+    /// Create `data/`, the database, and its schema if needed. Use `ingest` to
+    /// populate price history before opening a simulation's read connection.
+    ///
+    /// ```no_run
+    /// use chrono::NaiveDate;
+    /// use mcopti::MarketData;
+    ///
+    /// let mut history = MarketData::default_write("1d")?;
+    /// history.ingest(
+    ///     "ARM", "1d",
+    ///     NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+    ///     NaiveDate::from_ymd_opt(2025, 9, 8).unwrap(),
+    /// )?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if directory creation, database access, or schema setup fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `resolution` is not `"1d"`.
     pub fn default_write(resolution: &str) -> Result<Self> {
         Self::new("data", resolution, DbMode::Write)
     }
 
+    /// Select a nonempty list of columns for [`Self::fetch`], preserving the given order.
+    ///
+    /// Without a selection, all columns are read, including any unset indicators.
     pub fn columns(mut self, columns: &[Column]) -> Self {
         let mut columns_str = String::with_capacity(columns.len() * 12);
         for (i, c) in columns.iter().enumerate() {
@@ -257,6 +361,14 @@ impl MarketData {
         self
     }
 
+    /// Read `(UTC timestamp, selected values)` rows in ascending timestamp order.
+    ///
+    /// Includes timestamps from UTC midnight on `start` through the end of `end`.
+    /// Value order follows [`Self::columns`], or [`Column::idx`] for the default selection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails or a selected value is NULL or cannot be decoded.
     pub fn fetch(
         &self,
         ticker: &str,
@@ -290,6 +402,18 @@ impl MarketData {
         .collect()
     }
 
+    /// Download daily candles from Yahoo Finance and insert missing rows with derived indicators.
+    ///
+    /// The date bounds are inclusive. Implied volatility columns are left unset.
+    /// An empty response or reversed interval succeeds without inserting rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on HTTP, response decoding, or database failures.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `resolution` is not `"1d"`.
     pub fn ingest(
         &mut self,
         ticker: &str,
@@ -1001,6 +1125,38 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     const FIXTURE_DIR: &str = "tests/fixtures";
+
+    #[test]
+    fn write_creates_directory_and_read_sees_uncheckpointed_data() -> Result<()> {
+        let tmp = tempfile::tempdir().unwrap();
+        let directory = tmp.path().join("nested/data");
+        let directory = directory.to_str().unwrap();
+        let writer = MarketData::new(directory, "1d", DbMode::Write)?;
+        writer.connection.execute(
+            "INSERT INTO candles (ticker, timestamp, adjclose) VALUES (?1, ?2, ?3)",
+            params!["TEST", 1_672_704_000_i64, 100.0],
+        )?;
+        let reader = MarketData::new(directory, "1d", DbMode::Read)?.columns(&[Column::AdjClose]);
+        let date = NaiveDate::from_ymd_opt(2023, 1, 3).unwrap();
+        let rows = reader.fetch("TEST", date, date)?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1, vec![100.0]);
+        Ok(())
+    }
+
+    #[test]
+    fn read_does_not_create_missing_database() {
+        let tmp = tempfile::tempdir().unwrap();
+        let directory = tmp.path().join("missing");
+        let err = MarketData::new(directory.to_str().unwrap(), "1d", DbMode::Read)
+            .err()
+            .unwrap();
+        assert!(
+            err.to_string()
+                .contains("populate it with MarketData::ingest")
+        );
+        assert!(!directory.exists());
+    }
 
     #[test]
     fn fetch_subset_columns_returns_rows() -> rusqlite::Result<()> {

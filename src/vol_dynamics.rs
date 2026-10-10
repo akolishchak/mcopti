@@ -5,13 +5,20 @@ use std::{error::Error, fmt};
 
 use crate::{
     Column, HistoricalVolatility, HistoricalVolatilityError, MarketCalendar, MarketData,
-    OptionType, VolSurface,
+    OptionType, VolSurface, VolSurfaceError,
 };
 
+/// Failure to calibrate volatility scaling or drift from historical data.
 #[derive(Debug)]
 pub enum VolDynamicsError {
+    /// The market data database could not be opened or queried.
     MarketData(rusqlite::Error),
+    /// A realized volatility estimate could not be computed.
     HistoricalVolatility(HistoricalVolatilityError),
+    /// An implied volatility surface query failed.
+    VolSurface(VolSurfaceError),
+    /// The lookback or clamp bounds are invalid.
+    InvalidInput(&'static str),
 }
 
 impl fmt::Display for VolDynamicsError {
@@ -19,6 +26,8 @@ impl fmt::Display for VolDynamicsError {
         match self {
             Self::MarketData(e) => write!(f, "market data error: {e}"),
             Self::HistoricalVolatility(e) => write!(f, "{e}"),
+            Self::VolSurface(e) => write!(f, "{e}"),
+            Self::InvalidInput(msg) => write!(f, "invalid volatility dynamics input: {msg}"),
         }
     }
 }
@@ -28,6 +37,8 @@ impl Error for VolDynamicsError {
         match self {
             Self::MarketData(e) => Some(e),
             Self::HistoricalVolatility(e) => Some(e),
+            Self::VolSurface(e) => Some(e),
+            Self::InvalidInput(_) => None,
         }
     }
 }
@@ -44,6 +55,25 @@ impl From<HistoricalVolatilityError> for VolDynamicsError {
     }
 }
 
+impl From<VolSurfaceError> for VolDynamicsError {
+    fn from(value: VolSurfaceError) -> Self {
+        Self::VolSurface(value)
+    }
+}
+
+/// Build clamped realized-to-implied volatility ratios by calendar-day tenor.
+///
+/// Reads `data/market_data_1d.db`. The result has `ncal_max + 1` entries:
+/// index zero is NaN, and index `d` scales at-the-money IV for `d / 365` years.
+/// `ncal_max` and both clamp bounds must be positive; bounds must be finite and ordered.
+///
+/// # Errors
+///
+/// Returns an error for invalid bounds, unavailable history, or a failed surface query.
+///
+/// # Panics
+///
+/// Panics if the calendar does not cover the lookback dates.
 pub fn vol_factor_table(
     ticker: &str,
     as_of: NaiveDate,
@@ -53,6 +83,16 @@ pub fn vol_factor_table(
     ncal_max: i64,
     clamp: (f64, f64),
 ) -> Result<Vec<f64>, VolDynamicsError> {
+    if ncal_max <= 0
+        || !clamp.0.is_finite()
+        || !clamp.1.is_finite()
+        || clamp.0 <= 0.0
+        || clamp.0 > clamp.1
+    {
+        return Err(VolDynamicsError::InvalidInput(
+            "lookback and clamp bounds must be positive, finite and ordered",
+        ));
+    }
     let hv = HistoricalVolatility::new(ticker, as_of, ncal_max)?;
     let mut td = 0;
     let td_cum: Vec<_> = (1..=ncal_max)
@@ -69,20 +109,37 @@ pub fn vol_factor_table(
     f_by_day.push(f64::NAN);
     for (d, &tdays) in (1..=ncal_max).zip(td_cum.iter()) {
         // realized vol (annualized, 365) over TRADING DAYS window
-        let rv = hv.rv(tdays);
+        let rv = hv.rv(tdays)?;
         //  IV is from the current surface, tenor by CALENDAR d
-        let iv_now = volsurface.iv(side, d as f64 / 365.0, volsurface.spot);
+        let iv_now = volsurface.iv(side, d as f64 / 365.0, volsurface.spot)?;
         f_by_day.push((rv / iv_now).clamp(clamp.0, clamp.1));
     }
 
     Ok(f_by_day)
 }
 
+/// Estimate annual log-price drift from up to 250 adjusted daily closes.
+///
+/// Reads `data/market_data_1d.db`, fits a slope on a 252-trading-day clock,
+/// and clamps it to finite ordered bounds. Returns zero when fewer than 120 rows exist.
+///
+/// # Errors
+///
+/// Returns an error for invalid clamp bounds or a database failure.
+///
+/// # Panics
+///
+/// Panics if the 500-calendar-day lookback leaves the representable date range.
 pub fn mu_table(
     ticker: &str,
     as_of: NaiveDate,
     clamp: (f64, f64),
 ) -> Result<f64, VolDynamicsError> {
+    if !clamp.0.is_finite() || !clamp.1.is_finite() || clamp.0 > clamp.1 {
+        return Err(VolDynamicsError::InvalidInput(
+            "drift clamp bounds must be finite and ordered",
+        ));
+    }
     // long-horizon trend: fit a single slope on log prices over a 120–250 trading day window
     const MIN_LOOKBACK: usize = 120;
     const MAX_LOOKBACK: usize = 250;
@@ -139,7 +196,7 @@ mod tests {
         let raw_chain =
             parse_option_chain_file(chain_path).expect("failed to load option chain fixture");
         let chain = OptionChain::from_raw(&raw_chain);
-        let surface = VolSurface::new(&chain);
+        let surface = VolSurface::new(&chain).expect("valid fixture surface");
         let calendar = MarketCalendar::new(2024, 2026);
         let as_of = NaiveDate::from_ymd_opt(2025, 9, 5).unwrap();
 

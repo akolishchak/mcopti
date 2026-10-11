@@ -1,6 +1,6 @@
 # mcopti
 
-[![Crates.io](https://img.shields.io/crates/v/mcopti.svg)](https://crates.io/crates/mcopti)
+![Crates.io](https://img.shields.io/crates/v/mcopti.svg)
 
 `mcopti` is a fast option simulation engine with minimal dependencies.
 It supports any strategy you can express as a combination of option legs
